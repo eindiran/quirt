@@ -36,6 +36,10 @@ struct Args {
     #[arg(long, value_enum, default_value_t = ColorWhen::Auto)]
     color: ColorWhen,
 
+    /// Print even if the code is too wide or tall for the terminal.
+    #[arg(long)]
+    force: bool,
+
     /// Encode a trailing newline from a file or stdin instead of stripping it.
     #[arg(long)]
     keep_newline: bool,
@@ -126,8 +130,9 @@ fn main() -> anyhow::Result<()> {
     let code = render(&data, renderer)?;
     // Only stdout matters: `terminal_size()` would fall back to stderr or stdin and apply
     // the check to output redirected to a file.
-    if let Some((terminal_size::Width(cols), terminal_size::Height(rows))) =
-        terminal_size::terminal_size_of(io::stdout())
+    let size = terminal_size::terminal_size_of(io::stdout());
+    if let (false, Some((terminal_size::Width(cols), terminal_size::Height(rows)))) =
+        (args.force, size)
     {
         check_fits(&code, cols, rows)?;
     }
@@ -194,7 +199,7 @@ fn check_fits(
     if width > usize::from(terminal_cols) {
         anyhow::bail!(
             "qr code is {width} columns wide but the terminal is {terminal_cols}; \
-             widen the terminal or shorten the input"
+             widen the terminal, shorten the input, or pass --force"
         );
     }
     let height = code.lines();
@@ -202,7 +207,7 @@ fn check_fits(
     if height > visible {
         anyhow::bail!(
             "qr code is {height} lines tall but the terminal shows {visible} above the \
-             prompt; enlarge the terminal or shorten the input"
+             prompt; enlarge the terminal, shorten the input, or pass --force"
         );
     }
     Ok(())
@@ -259,7 +264,7 @@ mod tests {
         assert_eq!(
             err,
             "qr code is 33 columns wide but the terminal is 32; \
-             widen the terminal or shorten the input"
+             widen the terminal, shorten the input, or pass --force"
         );
     }
 
@@ -274,7 +279,7 @@ mod tests {
         assert_eq!(
             err,
             "qr code is 17 lines tall but the terminal shows 16 above the prompt; \
-             enlarge the terminal or shorten the input"
+             enlarge the terminal, shorten the input, or pass --force"
         );
     }
 }

@@ -299,7 +299,10 @@ mod pty {
         let mut child = {
             // Scoped so the Command, holding a copy of the terminal, drops after spawning.
             let mut cmd = Command::new(env!("CARGO_BIN_EXE_termqr"));
-            cmd.args(args).stdout(terminal).stderr(Stdio::null());
+            cmd.args(args)
+                .stdin(Stdio::null())
+                .stdout(terminal)
+                .stderr(Stdio::null());
             cmd.env_remove("NO_COLOR");
             for (k, v) in env {
                 cmd.env(k, v);
@@ -342,6 +345,17 @@ mod pty {
         assert!(!out.status.success());
         let stderr = String::from_utf8(out.stderr).unwrap();
         assert!(stderr.contains("qr code is 39 lines tall but the terminal shows 23"));
+    }
+
+    #[test]
+    fn force_skips_size_checks() {
+        // 600 bytes need 101 columns, more than the terminal's 80.
+        let text = "a".repeat(600);
+        let (ok, out) = run_on_terminal(&["--force", &text], &[]).unwrap();
+        assert!(ok);
+        assert!(!out.is_empty());
+        let (ok, _) = run_on_terminal(&[&text], &[]).unwrap();
+        assert!(!ok);
     }
 
     #[test]
