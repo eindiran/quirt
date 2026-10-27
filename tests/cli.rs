@@ -160,6 +160,40 @@ fn ascii_flag_matches_library() {
 }
 
 #[test]
+fn completions_for_each_shell() {
+    for (shell, marker) in [
+        ("bash", "_termqr()"),
+        ("zsh", "#compdef termqr"),
+        ("fish", "complete -c termqr"),
+    ] {
+        let out = run(&["--completions", shell], b"");
+        assert!(out.status.success());
+        let script = String::from_utf8(out.stdout).unwrap();
+        assert!(script.contains(marker), "{shell} script lacks {marker:?}");
+        assert!(script.contains("ec-level"));
+    }
+}
+
+#[test]
+fn man_page_is_roff() {
+    let out = run(&["--man"], b"");
+    assert!(out.status.success());
+    let page = String::from_utf8(out.stdout).unwrap();
+    assert!(page.contains(".TH termqr"));
+    assert!(page.contains("\\-\\-margin"));
+}
+
+#[test]
+fn generators_are_exclusive() {
+    assert!(!run(&["--man", "hello"], b"").status.success());
+    assert!(
+        !run(&["--completions", "bash", "--ascii"], b"")
+            .status
+            .success()
+    );
+}
+
+#[test]
 fn polarity_flag_is_gone() {
     let out = run(&["--polarity", "1", "hello"], b"");
     assert!(!out.status.success());

@@ -44,7 +44,7 @@ holds the input at that level is used; input that fits no version returns
 ## CLI
 
 The `termqr` binary is behind the `cli` feature, so library users do not pull in `clap`,
-`anyhow`, or `terminal_size`.
+`clap_complete`, `clap_mangen`, `anyhow`, or `terminal_size`.
 
 ```bash
 cargo install termqr --features cli
@@ -60,6 +60,16 @@ pbpaste | termqr
 
 Input comes from `TEXT` if given, else `--file`, else stdin.
 
+Install completions and the man page, e.g. for zsh:
+
+```bash
+termqr --completions zsh > "${fpath[1]}/_termqr"
+```
+
+```bash
+termqr --man > /usr/local/share/man/man1/termqr.1
+```
+
 | Argument | Effect |
 | --- | --- |
 | `[TEXT]` | Text to encode, verbatim; use `termqr -- -x` for text starting with `-` |
@@ -71,6 +81,8 @@ Input comes from `TEXT` if given, else `--file`, else stdin.
 | `--scale N` | Draw each module N columns by N half-lines, 1-255; default 1 |
 | `--ascii` | ASCII only: `##` per module, twice as wide |
 | `--force` | Print even if the code is too wide or tall for the terminal |
+| `--completions SHELL` | Print a completion script (`bash`, `zsh`, `fish`, `elvish`, `powershell`) and exit |
+| `--man` | Print the man page (roff) and exit |
 | `--keep-newline` | Keep a trailing `\n`/`\r\n` from a file or stdin; stripped by default |
 
 Input is encoded as raw bytes. The CLI exits 1 with a message on stderr when:

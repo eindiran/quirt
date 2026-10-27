@@ -7,7 +7,7 @@ use std::num::NonZeroU8;
 use std::path::PathBuf;
 
 use anyhow::Context;
-use clap::{Parser, ValueEnum};
+use clap::{CommandFactory, Parser, ValueEnum};
 
 /// Print text as a QR code in the terminal.
 ///
@@ -61,6 +61,14 @@ struct Args {
     /// Encode a trailing newline from a file or stdin instead of stripping it.
     #[arg(long)]
     keep_newline: bool,
+
+    /// Print a completion script for SHELL and exit.
+    #[arg(long, value_name = "SHELL", exclusive = true)]
+    completions: Option<clap_complete::Shell>,
+
+    /// Print the man page (roff) and exit.
+    #[arg(long, exclusive = true)]
+    man: bool,
 }
 
 /// Values of --color, following the `ls`/`grep` convention.
@@ -101,6 +109,18 @@ impl From<EcLevel> for termqr::ErrorCorrection {
 
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
+    if let Some(shell) = args.completions {
+        let mut script = Vec::new();
+        clap_complete::generate(shell, &mut Args::command(), "termqr", &mut script);
+        return write_stdout(&script);
+    }
+    if args.man {
+        let mut page = Vec::new();
+        clap_mangen::Man::new(Args::command())
+            .render(&mut page)
+            .context("failed to render the man page")?;
+        return write_stdout(&page);
+    }
 
     let data = match (args.text, &args.file) {
         // The argument is taken verbatim: a newline in it was put there on purpose.
@@ -161,8 +181,12 @@ fn main() -> anyhow::Result<()> {
     {
         check_fits(&code, cols, rows)?;
     }
-    match writeln!(io::stdout(), "{code}") {
-        // The reader closed early (`termqr | head`); that is not a failure of ours.
+    write_stdout(format!("{code}\n").as_bytes())
+}
+
+/// Writes `bytes` to stdout, treating a closed pipe (`termqr | head`) as success.
+fn write_stdout(bytes: &[u8]) -> anyhow::Result<()> {
+    match io::stdout().write_all(bytes) {
         Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
         result => result.context("failed to write to stdout"),
     }
