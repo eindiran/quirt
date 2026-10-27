@@ -137,6 +137,18 @@ fn margin_flag_matches_library() {
 }
 
 #[test]
+fn scale_flag_matches_library() {
+    let out = run(&["--scale", "2", "hello"], b"");
+    assert!(out.status.success());
+    let code = Renderer::new()
+        .scale(std::num::NonZeroU8::new(2).unwrap())
+        .render("hello")
+        .unwrap();
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("{code}\n"));
+    assert!(!run(&["--scale", "0", "hello"], b"").status.success());
+}
+
+#[test]
 fn polarity_flag_is_gone() {
     let out = run(&["--polarity", "1", "hello"], b"");
     assert!(!out.status.success());

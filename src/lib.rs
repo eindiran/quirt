@@ -10,6 +10,7 @@
 //! ```
 
 use std::fmt;
+use std::num::NonZeroU8;
 
 use qrcode::types::{Color, QrError};
 use qrcode::{EcLevel, QrCode};
@@ -142,6 +143,7 @@ pub struct Renderer {
     polarity: Polarity,
     colors: Colors,
     margin: u8,
+    scale: NonZeroU8,
 }
 
 impl Default for Renderer {
@@ -151,13 +153,14 @@ impl Default for Renderer {
             polarity: Polarity::default(),
             colors: Colors::default(),
             margin: DEFAULT_MARGIN,
+            scale: NonZeroU8::MIN,
         }
     }
 }
 
 impl Renderer {
-    /// A renderer with level M, [`Polarity::LightOnDark`], [`Colors::Plain`], and a
-    /// [`DEFAULT_MARGIN`]-module quiet zone.
+    /// A renderer with level M, [`Polarity::LightOnDark`], [`Colors::Plain`], a
+    /// [`DEFAULT_MARGIN`]-module quiet zone, and scale 1.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -182,6 +185,14 @@ impl Renderer {
     #[must_use]
     pub fn polarity(mut self, polarity: Polarity) -> Self {
         self.polarity = polarity;
+        self
+    }
+
+    /// Draws each module `factor` columns wide and `factor` half-lines tall, for codes
+    /// that must scan from farther away. The margin scales with it.
+    #[must_use]
+    pub fn scale(mut self, factor: NonZeroU8) -> Self {
+        self.scale = factor;
         self
     }
 
@@ -213,14 +224,16 @@ impl Renderer {
         let modules = code.width();
         let dark = code.to_colors();
         let margin = usize::from(self.margin);
-        let size = modules + 2 * margin;
-        // Whether the module at (x, y) of the bordered grid gets a filled glyph. Rows past
-        // the bottom (the odd half of the last line) are never filled, so they show the
-        // background.
+        let scale = usize::from(self.scale.get());
+        // Side of the bordered, scaled grid in cells; each cell is one column by half a line.
+        let size = (modules + 2 * margin) * scale;
+        // Whether cell (x, y) gets a filled glyph. Rows past the bottom (the odd half of the
+        // last line) are never filled, so they show the background.
         let filled = |x: usize, y: usize| -> bool {
             if y >= size {
                 return false;
             }
+            let (x, y) = (x / scale, y / scale);
             let is_dark = x >= margin
                 && y >= margin
                 && x < margin + modules
@@ -360,6 +373,27 @@ mod tests {
                 .unwrap()
                 .starts_with('\u{2588}')
         );
+    }
+
+    #[test]
+    fn scale_repeats_modules() {
+        let scaled = |n| {
+            Renderer::new()
+                .scale(NonZeroU8::new(n).unwrap())
+                .render("hello")
+                .unwrap()
+        };
+        // 29 cells per side at scale 1; lines hold two cells.
+        let three = scaled(3);
+        assert_eq!((three.columns(), three.lines()), (87, 44));
+        for line in three.as_str().lines() {
+            let chars: Vec<char> = line.chars().collect();
+            assert!(chars.chunks(3).all(|g| g.iter().all(|&c| c == g[0])));
+        }
+        // At scale 2 each line is exactly one module row, so no half blocks appear.
+        let two = scaled(2);
+        assert_eq!(two.lines(), 29);
+        assert!(!two.as_str().contains(['\u{2580}', '\u{2584}']));
     }
 
     #[test]

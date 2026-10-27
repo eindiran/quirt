@@ -3,6 +3,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io::{self, IsTerminal, Read, Write};
+use std::num::NonZeroU8;
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -39,6 +40,10 @@ struct Args {
     /// Quiet zone in modules on each side. The spec requires 4; most scanners read 1-2.
     #[arg(long, value_name = "N", default_value_t = termqr::DEFAULT_MARGIN)]
     margin: u8,
+
+    /// Draw each module N columns wide and N half-lines tall, to scan from farther away.
+    #[arg(long, value_name = "N", default_value_t = NonZeroU8::MIN)]
+    scale: NonZeroU8,
 
     /// Print even if the code is too wide or tall for the terminal.
     #[arg(long)]
@@ -131,7 +136,8 @@ fn main() -> anyhow::Result<()> {
             termqr::Polarity::LightOnDark
         })
         .colors(colors)
-        .margin(args.margin);
+        .margin(args.margin)
+        .scale(args.scale);
     let code = render(&data, renderer)?;
     // Only stdout matters: `terminal_size()` would fall back to stderr or stdin and apply
     // the check to output redirected to a file.
