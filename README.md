@@ -74,9 +74,10 @@ Input is encoded as raw bytes. The CLI exits 1 with a message on stderr when:
 | Input exceeds 7089 bytes (`termqr::MAX_DATA_LEN`, digits at level L) | `input is longer than 7089 bytes, more than any qr code holds` |
 | Input does not fit at the chosen level | `input is 2332 bytes, too long for error-correction level M (at most 2331 bytes of arbitrary data); it fits at --ec-level L` |
 | stdout is a terminal narrower than the code | `qr code is 185 columns wide but the terminal is 120; widen the terminal or shorten the input` |
+| stdout is a terminal with fewer than `lines + 1` rows (one is kept for the prompt) | `qr code is 39 lines tall but the terminal shows 23 above the prompt; enlarge the terminal or shorten the input` |
 
 Input is read only up to `MAX_DATA_LEN` plus a trailing `\r\n` and one byte, so endless
-input such as `yes | termqr` fails immediately. The width check looks only at stdout, so
+input such as `yes | termqr` fails immediately. The size checks look only at stdout, so
 `termqr > out.txt` from a terminal is not checked.
 
 ## Development

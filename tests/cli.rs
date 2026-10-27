@@ -236,7 +236,7 @@ fn endless_stdin_fails_fast() {
     assert!(stderr.contains("more than any qr code holds"));
 }
 
-/// Width-check tests against a real pseudo-terminal sized 80x24.
+/// Size-check and color tests against a real pseudo-terminal sized 80x24.
 #[cfg(unix)]
 mod pty {
     use std::ffi::OsStr;
@@ -269,8 +269,9 @@ mod pty {
         Ok((controller, terminal))
     }
 
-    /// Runs termqr on 600 zero bytes, which need version 19: 101 columns.
-    fn run_wide(stdout: Stdio, stderr: Stdio) -> io::Result<Output> {
+    /// Runs termqr on `len` zero bytes. 600 bytes need version 19 (101 columns, 51 lines);
+    /// 300 need version 13 (77 columns, 39 lines).
+    fn run_zeros(len: usize, stdout: Stdio, stderr: Stdio) -> io::Result<Output> {
         let mut child = Command::new(env!("CARGO_BIN_EXE_termqr"))
             .stdin(Stdio::piped())
             .stdout(stdout)
@@ -280,7 +281,7 @@ mod pty {
             .stdin
             .take()
             .expect("stdin was configured as piped")
-            .write_all(&[0u8; 600])?;
+            .write_all(&vec![0u8; len])?;
         child.wait_with_output()
     }
 
@@ -328,17 +329,26 @@ mod pty {
     #[test]
     fn wide_code_on_terminal_stdout_fails() {
         let (_controller, terminal) = open_terminal(80).unwrap();
-        let out = run_wide(terminal.into(), Stdio::piped()).unwrap();
+        let out = run_zeros(600, terminal.into(), Stdio::piped()).unwrap();
         assert!(!out.status.success());
         let stderr = String::from_utf8(out.stderr).unwrap();
         assert!(stderr.contains("qr code is 101 columns wide but the terminal is 80"));
     }
 
     #[test]
+    fn tall_code_on_terminal_stdout_fails() {
+        let (_controller, terminal) = open_terminal(80).unwrap();
+        let out = run_zeros(300, terminal.into(), Stdio::piped()).unwrap();
+        assert!(!out.status.success());
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert!(stderr.contains("qr code is 39 lines tall but the terminal shows 23"));
+    }
+
+    #[test]
     fn terminal_on_stderr_only_is_not_checked() {
         // Models `termqr > out.txt` run from an 80-column terminal.
         let (_controller, terminal) = open_terminal(80).unwrap();
-        let out = run_wide(Stdio::piped(), terminal.into()).unwrap();
+        let out = run_zeros(600, Stdio::piped(), terminal.into()).unwrap();
         assert!(out.status.success());
         assert!(!out.stdout.is_empty());
     }

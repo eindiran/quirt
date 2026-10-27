@@ -126,8 +126,10 @@ fn main() -> anyhow::Result<()> {
     let code = render(&data, renderer)?;
     // Only stdout matters: `terminal_size()` would fall back to stderr or stdin and apply
     // the check to output redirected to a file.
-    if let Some((terminal_size::Width(cols), _)) = terminal_size::terminal_size_of(io::stdout()) {
-        check_fits(&code, cols)?;
+    if let Some((terminal_size::Width(cols), terminal_size::Height(rows))) =
+        terminal_size::terminal_size_of(io::stdout())
+    {
+        check_fits(&code, cols, rows)?;
     }
     match writeln!(io::stdout(), "{code}") {
         // The reader closed early (`termqr | head`); that is not a failure of ours.
@@ -180,14 +182,27 @@ fn no_color() -> bool {
     std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
 }
 
-/// Fails if `code` is wider than `terminal_cols`. A wrapped QR code cannot be scanned, so
-/// printing it would only produce garbage.
-fn check_fits(code: &termqr::Rendered, terminal_cols: u16) -> anyhow::Result<()> {
+/// Fails if `code` is wider than `terminal_cols` or taller than the `terminal_rows - 1`
+/// lines left above the next prompt. A wrapped code, or one whose top scrolled away,
+/// cannot be scanned.
+fn check_fits(
+    code: &termqr::Rendered,
+    terminal_cols: u16,
+    terminal_rows: u16,
+) -> anyhow::Result<()> {
     let width = code.columns();
     if width > usize::from(terminal_cols) {
         anyhow::bail!(
             "qr code is {width} columns wide but the terminal is {terminal_cols}; \
              widen the terminal or shorten the input"
+        );
+    }
+    let height = code.lines();
+    let visible = usize::from(terminal_rows).saturating_sub(1);
+    if height > visible {
+        anyhow::bail!(
+            "qr code is {height} lines tall but the terminal shows {visible} above the \
+             prompt; enlarge the terminal or shorten the input"
         );
     }
     Ok(())
@@ -239,12 +254,27 @@ mod tests {
             .colors(termqr::Colors::Ansi)
             .render("https://example.com")
             .unwrap();
-        assert!(check_fits(&code, 33).is_ok());
-        let err = check_fits(&code, 32).unwrap_err().to_string();
+        assert!(check_fits(&code, 33, 100).is_ok());
+        let err = check_fits(&code, 32, 100).unwrap_err().to_string();
         assert_eq!(
             err,
             "qr code is 33 columns wide but the terminal is 32; \
              widen the terminal or shorten the input"
+        );
+    }
+
+    #[test]
+    fn height_check_leaves_a_line_for_the_prompt() {
+        // Version 2 plus quiet zone: 33 modules, so 17 lines.
+        let code = termqr::Renderer::new()
+            .render("https://example.com")
+            .unwrap();
+        assert!(check_fits(&code, 100, 18).is_ok());
+        let err = check_fits(&code, 100, 17).unwrap_err().to_string();
+        assert_eq!(
+            err,
+            "qr code is 17 lines tall but the terminal shows 16 above the prompt; \
+             enlarge the terminal or shorten the input"
         );
     }
 }
