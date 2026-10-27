@@ -14,6 +14,10 @@ use clap::{Parser, ValueEnum};
 /// Encodes TEXT if given, else the file from --file, else stdin.
 #[derive(Debug, Parser)]
 #[command(version)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each bool is an independent command-line switch"
+)]
 struct Args {
     /// Text to encode, as given (no newline trimming).
     #[arg(conflicts_with = "file")]
@@ -44,6 +48,11 @@ struct Args {
     /// Draw each module N columns wide and N half-lines tall, to scan from farther away.
     #[arg(long, value_name = "N", default_value_t = NonZeroU8::MIN)]
     scale: NonZeroU8,
+
+    /// Draw with ASCII only (`##` per module, twice as wide). For non-UTF-8 terminals and
+    /// terminals that draw block characters two columns wide.
+    #[arg(long)]
+    ascii: bool,
 
     /// Print even if the code is too wide or tall for the terminal.
     #[arg(long)]
@@ -137,7 +146,12 @@ fn main() -> anyhow::Result<()> {
         })
         .colors(colors)
         .margin(args.margin)
-        .scale(args.scale);
+        .scale(args.scale)
+        .glyphs(if args.ascii {
+            termqr::Glyphs::Ascii
+        } else {
+            termqr::Glyphs::HalfBlock
+        });
     let code = render(&data, renderer)?;
     // Only stdout matters: `terminal_size()` would fall back to stderr or stdin and apply
     // the check to output redirected to a file.

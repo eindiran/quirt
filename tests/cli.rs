@@ -149,6 +149,17 @@ fn scale_flag_matches_library() {
 }
 
 #[test]
+fn ascii_flag_matches_library() {
+    let out = run(&["--ascii", "hello"], b"");
+    assert!(out.status.success());
+    let code = Renderer::new()
+        .glyphs(termqr::Glyphs::Ascii)
+        .render("hello")
+        .unwrap();
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("{code}\n"));
+}
+
+#[test]
 fn polarity_flag_is_gone() {
     let out = run(&["--polarity", "1", "hello"], b"");
     assert!(!out.status.success());

@@ -2,7 +2,7 @@
 
 Rust library for displaying QR codes in a terminal emulator.
 
-Status: early scaffold. The only renderer is Unicode half blocks.
+Status: early development. Renders with Unicode half blocks or ASCII.
 
 ## Usage
 
@@ -23,6 +23,7 @@ println!("{code}");
 | `colors` | `Plain`: terminal's own colors. `Ansi`: SGR `30;107` forces black on bright white | `Plain` |
 | `polarity` | `LightOnDark`: light modules filled. `DarkOnLight`: dark modules filled. Only used with `Plain` | `LightOnDark` |
 | `error_correction` | See below | `Medium` |
+| `glyphs` | `HalfBlock`: Unicode half blocks. `Ascii`: `##` per module, twice as wide; colored spaces with `Ansi` | `HalfBlock` |
 | `scale` | Columns and half-lines per module (`NonZeroU8`); the margin scales too | 1 |
 | `margin` | Quiet zone in modules per side (`u8`). The spec requires 4; most scanners read 1-2 | `DEFAULT_MARGIN` (4) |
 
@@ -68,6 +69,7 @@ Input comes from `TEXT` if given, else `--file`, else stdin.
 | `--ec-level L\|M\|Q\|H` | Error-correction level, case-insensitive; default `M` |
 | `--margin N` | Quiet zone in modules per side, 0-255; default 4 |
 | `--scale N` | Draw each module N columns by N half-lines, 1-255; default 1 |
+| `--ascii` | ASCII only: `##` per module, twice as wide |
 | `--force` | Print even if the code is too wide or tall for the terminal |
 | `--keep-newline` | Keep a trailing `\n`/`\r\n` from a file or stdin; stripped by default |
 

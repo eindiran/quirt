@@ -121,11 +121,26 @@ pub enum Colors {
     Ansi,
 }
 
+/// Characters the code is drawn with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum Glyphs {
+    /// Unicode half blocks: one column and half a line per module.
+    #[default]
+    HalfBlock,
+    /// ASCII only: `##` or two spaces per module, one line tall, so twice as wide as
+    /// [`Glyphs::HalfBlock`]. Works in non-UTF-8 terminals and in terminals that draw the
+    /// block characters two columns wide. With [`Colors::Ansi`], modules are colored
+    /// spaces.
+    Ascii,
+}
+
 /// Modules of light border (quiet zone) the QR spec requires around the code.
 pub const DEFAULT_MARGIN: u8 = 4;
 
-/// Renders QR codes as Unicode half-block text. Each line holds two module rows, which
-/// keeps modules square in the usual 1:2 character cell.
+/// Renders QR codes as terminal text. Modules stay square in the usual 1:2 character cell:
+/// [`Glyphs::HalfBlock`] puts two module rows on each line, [`Glyphs::Ascii`] draws each
+/// module two characters wide.
 ///
 /// ```
 /// use termqr::{Colors, ErrorCorrection, Renderer};
@@ -144,6 +159,7 @@ pub struct Renderer {
     colors: Colors,
     margin: u8,
     scale: NonZeroU8,
+    glyphs: Glyphs,
 }
 
 impl Default for Renderer {
@@ -154,13 +170,14 @@ impl Default for Renderer {
             colors: Colors::default(),
             margin: DEFAULT_MARGIN,
             scale: NonZeroU8::MIN,
+            glyphs: Glyphs::default(),
         }
     }
 }
 
 impl Renderer {
     /// A renderer with level M, [`Polarity::LightOnDark`], [`Colors::Plain`], a
-    /// [`DEFAULT_MARGIN`]-module quiet zone, and scale 1.
+    /// [`DEFAULT_MARGIN`]-module quiet zone, scale 1, and [`Glyphs::HalfBlock`].
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -196,6 +213,13 @@ impl Renderer {
         self
     }
 
+    /// Sets the characters the code is drawn with.
+    #[must_use]
+    pub fn glyphs(mut self, glyphs: Glyphs) -> Self {
+        self.glyphs = glyphs;
+        self
+    }
+
     /// Sets where colors come from.
     #[must_use]
     pub fn colors(mut self, colors: Colors) -> Self {
@@ -225,7 +249,8 @@ impl Renderer {
         let dark = code.to_colors();
         let margin = usize::from(self.margin);
         let scale = usize::from(self.scale.get());
-        // Side of the bordered, scaled grid in cells; each cell is one column by half a line.
+        // Side of the bordered, scaled grid in cells. A cell is one column by half a line with
+        // half blocks, two columns by one line with ASCII.
         let size = (modules + 2 * margin) * scale;
         // Whether cell (x, y) gets a filled glyph. Rows past the bottom (the odd half of the
         // last line) are never filled, so they show the background.
@@ -245,30 +270,61 @@ impl Renderer {
             }
         };
 
-        let lines = size.div_ceil(2);
         let mut text = String::new();
-        for line in 0..lines {
-            if line > 0 {
-                text.push('\n');
+        let (columns, lines) = match self.glyphs {
+            Glyphs::HalfBlock => {
+                let lines = size.div_ceil(2);
+                for line in 0..lines {
+                    if line > 0 {
+                        text.push('\n');
+                    }
+                    if self.colors == Colors::Ansi {
+                        text.push_str(ANSI_DARK_ON_LIGHT);
+                    }
+                    for x in 0..size {
+                        text.push(match (filled(x, 2 * line), filled(x, 2 * line + 1)) {
+                            (true, true) => '\u{2588}',
+                            (true, false) => '\u{2580}',
+                            (false, true) => '\u{2584}',
+                            (false, false) => ' ',
+                        });
+                    }
+                    if self.colors == Colors::Ansi {
+                        text.push_str(ANSI_RESET);
+                    }
+                }
+                (size, lines)
             }
-            if self.colors == Colors::Ansi {
-                text.push_str(ANSI_DARK_ON_LIGHT);
+            Glyphs::Ascii => {
+                for y in 0..size {
+                    if y > 0 {
+                        text.push('\n');
+                    }
+                    if self.colors == Colors::Ansi {
+                        // `#` leaves gaps in its cell, so color spaces instead; an escape
+                        // is emitted only where the color changes.
+                        let mut current = None;
+                        for x in 0..size {
+                            let dark = filled(x, y);
+                            if current != Some(dark) {
+                                text.push_str(if dark { ANSI_BG_BLACK } else { ANSI_BG_WHITE });
+                                current = Some(dark);
+                            }
+                            text.push_str("  ");
+                        }
+                        text.push_str(ANSI_RESET);
+                    } else {
+                        for x in 0..size {
+                            text.push_str(if filled(x, y) { "##" } else { "  " });
+                        }
+                    }
+                }
+                (2 * size, size)
             }
-            for x in 0..size {
-                text.push(match (filled(x, 2 * line), filled(x, 2 * line + 1)) {
-                    (true, true) => '\u{2588}',
-                    (true, false) => '\u{2580}',
-                    (false, true) => '\u{2584}',
-                    (false, false) => ' ',
-                });
-            }
-            if self.colors == Colors::Ansi {
-                text.push_str(ANSI_RESET);
-            }
-        }
+        };
         Ok(Rendered {
             text,
-            columns: size,
+            columns,
             lines,
         })
     }
@@ -277,6 +333,9 @@ impl Renderer {
 /// SGR black foreground on bright-white background.
 const ANSI_DARK_ON_LIGHT: &str = "\x1b[30;107m";
 const ANSI_RESET: &str = "\x1b[0m";
+/// SGR black and bright-white backgrounds, for [`Glyphs::Ascii`] with [`Colors::Ansi`].
+const ANSI_BG_BLACK: &str = "\x1b[40m";
+const ANSI_BG_WHITE: &str = "\x1b[107m";
 
 /// A rendered code. `Display` prints the text; the size accessors exclude ANSI escapes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -394,6 +453,53 @@ mod tests {
         let two = scaled(2);
         assert_eq!(two.lines(), 29);
         assert!(!two.as_str().contains(['\u{2580}', '\u{2584}']));
+    }
+
+    #[test]
+    fn ascii_matches_half_block_cells() {
+        let half = Renderer::new()
+            .polarity(Polarity::DarkOnLight)
+            .render("hello")
+            .unwrap();
+        let ascii = Renderer::new()
+            .polarity(Polarity::DarkOnLight)
+            .glyphs(Glyphs::Ascii)
+            .render("hello")
+            .unwrap();
+        assert_eq!((ascii.columns(), ascii.lines()), (58, 29));
+        assert!(ascii.as_str().is_ascii());
+        let half: Vec<Vec<char>> = half.as_str().lines().map(|l| l.chars().collect()).collect();
+        for (y, line) in ascii.as_str().lines().enumerate() {
+            let line = line.as_bytes();
+            for x in 0..29 {
+                let glyph = half[y / 2][x];
+                let filled = match glyph {
+                    '\u{2588}' => true,
+                    '\u{2580}' => y % 2 == 0,
+                    '\u{2584}' => y % 2 == 1,
+                    _ => false,
+                };
+                let expected: &[u8] = if filled { b"##" } else { b"  " };
+                assert_eq!(&line[2 * x..2 * x + 2], expected);
+            }
+        }
+    }
+
+    #[test]
+    fn ascii_ansi_uses_colored_spaces() {
+        let code = Renderer::new()
+            .glyphs(Glyphs::Ascii)
+            .colors(Colors::Ansi)
+            .render("hello")
+            .unwrap();
+        assert!(code.as_str().is_ascii());
+        assert!(!code.as_str().contains('#'));
+        // The first line is all quiet zone: one white run, then the reset.
+        let first = code.as_str().lines().next().unwrap();
+        assert_eq!(
+            first,
+            format!("{ANSI_BG_WHITE}{}{ANSI_RESET}", " ".repeat(58))
+        );
     }
 
     #[test]
