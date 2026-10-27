@@ -61,7 +61,7 @@ Input comes from `TEXT` if given, else `--file`, else stdin.
 | --- | --- |
 | `[TEXT]` | Text to encode, verbatim; use `termqr -- -x` for text starting with `-` |
 | `-f, --file FILE` | File to encode; `-` reads stdin. Conflicts with `TEXT` |
-| `--polarity 0\|1` | Without colors: `0` (default) for light-on-dark themes, `1` for dark-on-light |
+| `--invert` | Without colors, fill dark modules instead of light ones; for light-background terminals |
 | `--color auto\|always\|never` | Force black-on-white with ANSI colors. `auto` (default) colors only a terminal stdout, and not when `NO_COLOR` is set |
 | `--ec-level L\|M\|Q\|H` | Error-correction level, case-insensitive; default `M` |
 | `--keep-newline` | Keep a trailing `\n`/`\r\n` from a file or stdin; stripped by default |

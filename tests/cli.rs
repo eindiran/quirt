@@ -55,10 +55,10 @@ fn keep_newline_encodes_it() {
 }
 
 #[test]
-fn reads_file_with_polarity() {
+fn reads_file_with_invert() {
     let path = std::env::temp_dir().join(format!("termqr-cli-{}.txt", std::process::id()));
     std::fs::write(&path, "from file\n").unwrap();
-    let out = run(&["--polarity", "1", "-f", path.to_str().unwrap()], b"");
+    let out = run(&["--invert", "-f", path.to_str().unwrap()], b"");
     let _ = std::fs::remove_file(&path); // best-effort cleanup of a temp file
     assert!(out.status.success());
     assert_eq!(
@@ -118,6 +118,19 @@ fn empty_text_argument_is_an_error() {
 fn color_auto_is_plain_when_piped() {
     let out = run(&["--color", "auto", "hello"], b"");
     assert!(!out.stdout.contains(&0x1b));
+}
+
+#[test]
+fn invert_is_ignored_with_colors() {
+    let plain = run(&["--color", "always", "hello"], b"");
+    let inverted = run(&["--color", "always", "--invert", "hello"], b"");
+    assert_eq!(plain.stdout, inverted.stdout);
+}
+
+#[test]
+fn polarity_flag_is_gone() {
+    let out = run(&["--polarity", "1", "hello"], b"");
+    assert!(!out.status.success());
 }
 
 #[test]

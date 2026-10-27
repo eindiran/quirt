@@ -22,16 +22,17 @@ struct Args {
     #[arg(short, long, value_name = "FILE")]
     file: Option<PathBuf>,
 
-    /// Terminal color scheme, which decides which modules are drawn filled.
-    #[arg(long, value_enum, default_value_t = Polarity::LightOnDark)]
-    polarity: Polarity,
+    /// Without colors, fill dark modules instead of light ones. Use on light-background
+    /// terminals.
+    #[arg(long)]
+    invert: bool,
 
     /// Error-correction level. Higher levels survive more damage but make larger codes.
     #[arg(long, value_enum, ignore_case = true, default_value_t = EcLevel::M)]
     ec_level: EcLevel,
 
     /// When to force black-on-white with ANSI colors. `auto` colors only a terminal
-    /// stdout, and not when `NO_COLOR` is set. `--polarity` applies only without colors.
+    /// stdout, and not when `NO_COLOR` is set. `--invert` applies only without colors.
     #[arg(long, value_enum, default_value_t = ColorWhen::Auto)]
     color: ColorWhen,
 
@@ -76,27 +77,6 @@ impl From<EcLevel> for termqr::ErrorCorrection {
     }
 }
 
-/// CLI mirror of [`termqr::Polarity`], which is `#[non_exhaustive]` and has no clap derive.
-/// Spelled `0`/`1` on the command line.
-#[derive(Debug, Clone, Copy, ValueEnum)]
-enum Polarity {
-    /// Light-on-dark terminal theme
-    #[value(name = "0")]
-    LightOnDark,
-    /// Dark-on-light terminal theme
-    #[value(name = "1")]
-    DarkOnLight,
-}
-
-impl From<Polarity> for termqr::Polarity {
-    fn from(p: Polarity) -> Self {
-        match p {
-            Polarity::LightOnDark => Self::LightOnDark,
-            Polarity::DarkOnLight => Self::DarkOnLight,
-        }
-    }
-}
-
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
@@ -137,7 +117,11 @@ fn main() -> anyhow::Result<()> {
     };
     let renderer = termqr::Renderer::new()
         .error_correction(args.ec_level.into())
-        .polarity(args.polarity.into())
+        .polarity(if args.invert {
+            termqr::Polarity::DarkOnLight
+        } else {
+            termqr::Polarity::LightOnDark
+        })
         .colors(colors);
     let code = render(&data, renderer)?;
     // Only stdout matters: `terminal_size()` would fall back to stderr or stdin and apply
