@@ -1,26 +1,17 @@
 //! Render QR codes for display in a terminal emulator.
 //!
-//! Encoding is done by the [`qrcode`] crate; this crate turns the module grid into text a
-//! terminal can show. The current renderer packs two module rows into each line with
-//! Unicode half blocks, which keeps the code roughly square in the usual 1:2 character
-//! cell.
+//! Encoding is done by the [`qrcode`] crate; [`Renderer`] turns the module grid into text
+//! a terminal can show.
 //!
 //! ```
-//! use termqr::{ErrorCorrection, Polarity};
-//!
-//! let text = termqr::render(
-//!     "https://example.com",
-//!     Polarity::LightOnDark,
-//!     ErrorCorrection::Medium,
-//! )?;
-//! println!("{text}");
+//! let code = termqr::Renderer::new().render("https://example.com")?;
+//! println!("{code}");
 //! # Ok::<(), termqr::Error>(())
 //! ```
 
 use std::fmt;
 
-use qrcode::render::unicode::Dense1x2;
-use qrcode::types::QrError;
+use qrcode::types::{Color, QrError};
 use qrcode::{EcLevel, QrCode};
 
 /// Longest input, in bytes, that any QR code can hold: 7089 digits at version 40, level L.
@@ -116,69 +107,247 @@ impl From<ErrorCorrection> for EcLevel {
     }
 }
 
-/// Renders `data` as a QR code built from Unicode half-block characters.
+/// Where the code's colors come from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum Colors {
+    /// Plain glyphs in the terminal's own colors; [`Polarity`] decides which modules are
+    /// filled.
+    #[default]
+    Plain,
+    /// ANSI escapes force black modules on a bright-white background (SGR `30;107`) on
+    /// every line, so the code scans whatever the terminal theme. [`Polarity`] is ignored.
+    Ansi,
+}
+
+/// Modules of light border the QR spec requires around the code.
+const QUIET_ZONE: usize = 4;
+
+/// Renders QR codes as Unicode half-block text. Each line holds two module rows, which
+/// keeps modules square in the usual 1:2 character cell.
 ///
-/// Uses the smallest QR version that holds `data` at `error_correction`. The output
-/// includes the standard 4-module quiet zone, uses `\n` between lines, and has no trailing
-/// newline.
+/// ```
+/// use termqr::{Colors, ErrorCorrection, Renderer};
 ///
-/// # Errors
-///
-/// Returns [`Error::TooLong`] if `data` does not fit in any QR version at
-/// `error_correction`, and [`Error::Encode`] for any other encoder failure.
-pub fn render(
-    data: impl AsRef<[u8]>,
-    polarity: Polarity,
+/// let code = Renderer::new()
+///     .error_correction(ErrorCorrection::High)
+///     .colors(Colors::Ansi)
+///     .render("https://example.com")?;
+/// println!("{code}");
+/// # Ok::<(), termqr::Error>(())
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub struct Renderer {
     error_correction: ErrorCorrection,
-) -> Result<String, Error> {
-    let data = data.as_ref();
-    let code =
-        QrCode::with_error_correction_level(data, error_correction.into()).map_err(
-            |e| match e {
+    polarity: Polarity,
+    colors: Colors,
+}
+
+impl Renderer {
+    /// A renderer with level M, [`Polarity::LightOnDark`], and [`Colors::Plain`].
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Sets the error-correction level.
+    #[must_use]
+    pub fn error_correction(mut self, level: ErrorCorrection) -> Self {
+        self.error_correction = level;
+        self
+    }
+
+    /// Sets which modules are filled when colors are [`Colors::Plain`].
+    #[must_use]
+    pub fn polarity(mut self, polarity: Polarity) -> Self {
+        self.polarity = polarity;
+        self
+    }
+
+    /// Sets where colors come from.
+    #[must_use]
+    pub fn colors(mut self, colors: Colors) -> Self {
+        self.colors = colors;
+        self
+    }
+
+    /// Encodes `data` in the smallest QR version that holds it and renders it, including
+    /// the 4-module quiet zone. Lines are joined with `\n`, with no trailing newline.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::TooLong`] if `data` does not fit in any QR version at the chosen
+    /// level, and [`Error::Encode`] for any other encoder failure.
+    pub fn render(&self, data: impl AsRef<[u8]>) -> Result<Rendered, Error> {
+        let data = data.as_ref();
+        let code = QrCode::with_error_correction_level(data, self.error_correction.into())
+            .map_err(|e| match e {
                 QrError::DataTooLong => Error::TooLong {
                     len: data.len(),
-                    level: error_correction,
+                    level: self.error_correction,
                 },
                 other => Error::Encode(other),
-            },
-        )?;
-    let (dark, light) = match polarity {
-        Polarity::LightOnDark => (Dense1x2::Light, Dense1x2::Dark),
-        Polarity::DarkOnLight => (Dense1x2::Dark, Dense1x2::Light),
-    };
-    Ok(code
-        .render::<Dense1x2>()
-        .dark_color(dark)
-        .light_color(light)
-        .quiet_zone(true)
-        .build())
+            })?;
+
+        let modules = code.width();
+        let dark = code.to_colors();
+        let size = modules + 2 * QUIET_ZONE;
+        // Whether the module at (x, y) of the bordered grid gets a filled glyph. Rows past
+        // the bottom (the odd half of the last line) are never filled, so they show the
+        // background.
+        let filled = |x: usize, y: usize| -> bool {
+            if y >= size {
+                return false;
+            }
+            let is_dark = x >= QUIET_ZONE
+                && y >= QUIET_ZONE
+                && x < QUIET_ZONE + modules
+                && y < QUIET_ZONE + modules
+                && dark[(y - QUIET_ZONE) * modules + (x - QUIET_ZONE)] == Color::Dark;
+            match (self.colors, self.polarity) {
+                (Colors::Ansi, _) | (Colors::Plain, Polarity::DarkOnLight) => is_dark,
+                (Colors::Plain, Polarity::LightOnDark) => !is_dark,
+            }
+        };
+
+        let lines = size.div_ceil(2);
+        let mut text = String::new();
+        for line in 0..lines {
+            if line > 0 {
+                text.push('\n');
+            }
+            if self.colors == Colors::Ansi {
+                text.push_str(ANSI_DARK_ON_LIGHT);
+            }
+            for x in 0..size {
+                text.push(match (filled(x, 2 * line), filled(x, 2 * line + 1)) {
+                    (true, true) => '\u{2588}',
+                    (true, false) => '\u{2580}',
+                    (false, true) => '\u{2584}',
+                    (false, false) => ' ',
+                });
+            }
+            if self.colors == Colors::Ansi {
+                text.push_str(ANSI_RESET);
+            }
+        }
+        Ok(Rendered {
+            text,
+            columns: size,
+            lines,
+        })
+    }
+}
+
+/// SGR black foreground on bright-white background.
+const ANSI_DARK_ON_LIGHT: &str = "\x1b[30;107m";
+const ANSI_RESET: &str = "\x1b[0m";
+
+/// A rendered code. `Display` prints the text; the size accessors exclude ANSI escapes.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Rendered {
+    text: String,
+    columns: usize,
+    lines: usize,
+}
+
+impl Rendered {
+    /// The rendered text, including any ANSI escapes.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.text
+    }
+
+    /// Width in terminal columns.
+    #[must_use]
+    pub fn columns(&self) -> usize {
+        self.columns
+    }
+
+    /// Height in lines.
+    #[must_use]
+    pub fn lines(&self) -> usize {
+        self.lines
+    }
+
+    /// Consumes the code, returning its text.
+    #[must_use]
+    pub fn into_string(self) -> String {
+        self.text
+    }
+}
+
+impl fmt::Display for Rendered {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.text)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn width(text: &str) -> usize {
-        text.lines().next().unwrap().chars().count()
+    fn render_at(data: impl AsRef<[u8]>, level: ErrorCorrection) -> Result<Rendered, Error> {
+        Renderer::new().error_correction(level).render(data)
     }
 
     #[test]
-    fn lines_have_equal_width() {
-        let text = render("hello", Polarity::default(), ErrorCorrection::default()).unwrap();
-        let widths: Vec<usize> = text.lines().map(|l| l.chars().count()).collect();
-        assert!(!widths.is_empty());
-        assert!(widths.iter().all(|&w| w == widths[0]));
+    fn plain_matches_qrcode_dense1x2() {
+        use qrcode::render::unicode::Dense1x2;
+        for data in ["hello", "https://example.com", "0123456789"] {
+            let code = QrCode::new(data).unwrap();
+            for (polarity, dark, light) in [
+                (Polarity::LightOnDark, Dense1x2::Light, Dense1x2::Dark),
+                (Polarity::DarkOnLight, Dense1x2::Dark, Dense1x2::Light),
+            ] {
+                let reference = code
+                    .render::<Dense1x2>()
+                    .dark_color(dark)
+                    .light_color(light)
+                    .quiet_zone(true)
+                    .build();
+                let ours = Renderer::new().polarity(polarity).render(data).unwrap();
+                assert_eq!(ours.as_str(), reference);
+            }
+        }
     }
 
     #[test]
-    fn polarity_inverts_quiet_zone() {
-        // The first line is all quiet zone, so it is blank in one polarity and filled in
-        // the other.
-        let light = render("hello", Polarity::LightOnDark, ErrorCorrection::default()).unwrap();
-        let dark = render("hello", Polarity::DarkOnLight, ErrorCorrection::default()).unwrap();
-        let first = |s: &str| s.lines().next().unwrap().to_owned();
-        assert!(first(&light).chars().all(|c| c == '\u{2588}'));
-        assert!(first(&dark).chars().all(|c| c == ' '));
+    fn size_accessors() {
+        // Version 1: 21 modules plus two 4-module quiet zones.
+        let code = Renderer::new().render("hello").unwrap();
+        assert_eq!(code.columns(), 29);
+        assert_eq!(code.lines(), 15);
+        assert!(code.as_str().lines().all(|l| l.chars().count() == 29));
+        assert_eq!(code.as_str().lines().count(), 15);
+    }
+
+    #[test]
+    fn ansi_wraps_dark_on_light_lines() {
+        let ansi = Renderer::new()
+            .colors(Colors::Ansi)
+            .render("hello")
+            .unwrap();
+        let plain = Renderer::new()
+            .polarity(Polarity::DarkOnLight)
+            .render("hello")
+            .unwrap();
+        assert_eq!(
+            (ansi.columns(), ansi.lines()),
+            (plain.columns(), plain.lines())
+        );
+        for (a, p) in ansi.as_str().lines().zip(plain.as_str().lines()) {
+            assert_eq!(a, format!("{ANSI_DARK_ON_LIGHT}{p}{ANSI_RESET}"));
+        }
+    }
+
+    #[test]
+    fn ansi_ignores_polarity() {
+        let r = Renderer::new().colors(Colors::Ansi);
+        assert_eq!(
+            r.polarity(Polarity::LightOnDark).render("hello").unwrap(),
+            r.polarity(Polarity::DarkOnLight).render("hello").unwrap()
+        );
     }
 
     #[test]
@@ -186,8 +355,8 @@ mod tests {
         // 0x00 bytes force byte mode, so `max_bytes` is the exact limit.
         for level in ErrorCorrection::ALL {
             let max = level.max_bytes();
-            assert!(render(vec![0u8; max], Polarity::default(), level).is_ok());
-            let err = render(vec![0u8; max + 1], Polarity::default(), level).unwrap_err();
+            assert!(render_at(vec![0u8; max], level).is_ok());
+            let err = render_at(vec![0u8; max + 1], level).unwrap_err();
             assert!(
                 matches!(err, Error::TooLong { len, level: l } if len == max + 1 && l == level)
             );
@@ -196,11 +365,7 @@ mod tests {
 
     #[test]
     fn too_long_message() {
-        let err = render(
-            vec![0u8; 2332],
-            Polarity::default(),
-            ErrorCorrection::Medium,
-        );
+        let err = render_at(vec![0u8; 2332], ErrorCorrection::Medium);
         assert_eq!(
             err.unwrap_err().to_string(),
             "2332 bytes do not fit in a qr code at error-correction level M"
@@ -209,10 +374,8 @@ mod tests {
 
     #[test]
     fn max_data_len_is_digits_at_low() {
-        let digits = vec![b'7'; MAX_DATA_LEN];
-        assert!(render(&digits, Polarity::default(), ErrorCorrection::Low).is_ok());
-        let digits = vec![b'7'; MAX_DATA_LEN + 1];
-        assert!(render(&digits, Polarity::default(), ErrorCorrection::Low).is_err());
+        assert!(render_at(vec![b'7'; MAX_DATA_LEN], ErrorCorrection::Low).is_ok());
+        assert!(render_at(vec![b'7'; MAX_DATA_LEN + 1], ErrorCorrection::Low).is_err());
     }
 
     #[test]
@@ -220,9 +383,10 @@ mod tests {
         // 20 bytes need version 2 at L (holds 32) and version 3 at H (holds 24). Width with
         // quiet zone is 25 + 4 * version.
         let data = "https://example.com/";
-        let low = render(data, Polarity::default(), ErrorCorrection::Low).unwrap();
-        let high = render(data, Polarity::default(), ErrorCorrection::High).unwrap();
-        assert_eq!(width(&low), 33);
-        assert_eq!(width(&high), 37);
+        assert_eq!(render_at(data, ErrorCorrection::Low).unwrap().columns(), 33);
+        assert_eq!(
+            render_at(data, ErrorCorrection::High).unwrap().columns(),
+            37
+        );
     }
 }

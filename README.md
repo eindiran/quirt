@@ -7,14 +7,25 @@ Status: early scaffold. The only renderer is Unicode half blocks.
 ## Usage
 
 ```rust
-use termqr::{ErrorCorrection, Polarity};
+use termqr::{Colors, ErrorCorrection, Renderer};
 
-let text = termqr::render("https://example.com", Polarity::LightOnDark, ErrorCorrection::Medium)?;
-println!("{text}");
+let code = Renderer::new()
+    .error_correction(ErrorCorrection::Medium)
+    .colors(Colors::Ansi)
+    .render("https://example.com")?;
+println!("{code}");
 ```
 
-`Polarity` picks which modules use filled glyphs. Scanners need dark modules on a light
-background, so use `LightOnDark` on dark-themed terminals and `DarkOnLight` on light ones.
+`render` returns a `Rendered` with `columns()` and `lines()`, which exclude ANSI escapes.
+
+| Setting | Values | Default |
+| --- | --- | --- |
+| `colors` | `Plain`: terminal's own colors. `Ansi`: SGR `30;107` forces black on bright white | `Plain` |
+| `polarity` | `LightOnDark`: light modules filled. `DarkOnLight`: dark modules filled. Only used with `Plain` | `LightOnDark` |
+| `error_correction` | See below | `Medium` |
+
+Scanners need dark modules on a light background. With `Plain`, pick the `Polarity`
+matching the terminal theme; `Ansi` works on any theme.
 
 `ErrorCorrection` trades capacity for damage tolerance. The smallest QR version that
 holds the input at that level is used; input that fits no version returns
@@ -50,7 +61,8 @@ Input comes from `TEXT` if given, else `--file`, else stdin.
 | --- | --- |
 | `[TEXT]` | Text to encode, verbatim; use `termqr -- -x` for text starting with `-` |
 | `-f, --file FILE` | File to encode; `-` reads stdin. Conflicts with `TEXT` |
-| `--polarity 0\|1` | `0` (default): light-on-dark theme; `1`: dark-on-light theme |
+| `--polarity 0\|1` | Without colors: `0` (default) for light-on-dark themes, `1` for dark-on-light |
+| `--color auto\|always\|never` | Force black-on-white with ANSI colors. `auto` (default) colors only a terminal stdout, and not when `NO_COLOR` is set |
 | `--ec-level L\|M\|Q\|H` | Error-correction level, case-insensitive; default `M` |
 | `--keep-newline` | Keep a trailing `\n`/`\r\n` from a file or stdin; stripped by default |
 

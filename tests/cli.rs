@@ -4,7 +4,7 @@
 use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
-use termqr::{ErrorCorrection, Polarity};
+use termqr::{Colors, ErrorCorrection, Polarity, Renderer};
 
 fn run(args: &[&str], stdin: &[u8]) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_termqr"))
@@ -26,8 +26,12 @@ fn run(args: &[&str], stdin: &[u8]) -> Output {
 }
 
 fn expected(data: &str, polarity: Polarity, ec: ErrorCorrection) -> String {
-    let text = termqr::render(data, polarity, ec).expect("test inputs fit in a qr code");
-    format!("{text}\n")
+    let code = Renderer::new()
+        .polarity(polarity)
+        .error_correction(ec)
+        .render(data)
+        .expect("test inputs fit in a qr code");
+    format!("{code}\n")
 }
 
 #[test]
@@ -108,6 +112,29 @@ fn empty_text_argument_is_an_error() {
     assert!(!out.status.success());
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(stderr.contains("input is empty; nothing to encode"));
+}
+
+#[test]
+fn color_auto_is_plain_when_piped() {
+    let out = run(&["--color", "auto", "hello"], b"");
+    assert!(!out.stdout.contains(&0x1b));
+}
+
+#[test]
+fn color_always_forces_ansi_even_with_no_color() {
+    let ansi = Renderer::new()
+        .colors(Colors::Ansi)
+        .render("hello")
+        .unwrap();
+    for no_color in ["", "1"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_termqr"))
+            .args(["--color", "always", "hello"])
+            .env("NO_COLOR", no_color)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("{ansi}\n"));
+    }
 }
 
 #[test]
@@ -201,7 +228,7 @@ fn endless_stdin_fails_fast() {
 mod pty {
     use std::ffi::OsStr;
     use std::fs::{File, OpenOptions};
-    use std::io::{self, Write};
+    use std::io::{self, Read, Write};
     use std::os::fd::OwnedFd;
     use std::os::unix::ffi::OsStrExt;
     use std::process::{Command, Output, Stdio};
@@ -242,6 +269,47 @@ mod pty {
             .expect("stdin was configured as piped")
             .write_all(&[0u8; 600])?;
         child.wait_with_output()
+    }
+
+    /// Runs termqr with stdout on an 80-column terminal and returns its exit status and
+    /// everything it wrote there. The pty turns `\n` into `\r\n`.
+    fn run_on_terminal(args: &[&str], env: &[(&str, &str)]) -> io::Result<(bool, Vec<u8>)> {
+        let (controller, terminal) = open_terminal(80)?;
+        // Read the controller side concurrently so output cannot fill the pty buffer. The
+        // read ends with EOF or EIO once the child, the last holder of the terminal, exits.
+        let reader = std::thread::spawn(move || {
+            let mut out = Vec::new();
+            let _ = File::from(controller).read_to_end(&mut out); // EIO marks the end
+            out
+        });
+        let mut child = {
+            // Scoped so the Command, holding a copy of the terminal, drops after spawning.
+            let mut cmd = Command::new(env!("CARGO_BIN_EXE_termqr"));
+            cmd.args(args).stdout(terminal).stderr(Stdio::null());
+            cmd.env_remove("NO_COLOR");
+            for (k, v) in env {
+                cmd.env(k, v);
+            }
+            cmd.spawn()?
+        };
+        let status = child.wait()?;
+        let out = reader.join().expect("reader thread does not panic");
+        Ok((status.success(), out))
+    }
+
+    #[test]
+    fn color_auto_on_terminal_is_ansi() {
+        let (ok, out) = run_on_terminal(&["hello"], &[]).unwrap();
+        assert!(ok);
+        assert!(out.starts_with(b"\x1b[30;107m"));
+    }
+
+    #[test]
+    fn color_auto_respects_no_color() {
+        let (ok, out) = run_on_terminal(&["hello"], &[("NO_COLOR", "1")]).unwrap();
+        assert!(ok);
+        assert!(!out.is_empty());
+        assert!(!out.contains(&0x1b));
     }
 
     #[test]

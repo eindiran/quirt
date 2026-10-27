@@ -2,7 +2,7 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::path::PathBuf;
 
 use anyhow::Context;
@@ -30,9 +30,22 @@ struct Args {
     #[arg(long, value_enum, ignore_case = true, default_value_t = EcLevel::M)]
     ec_level: EcLevel,
 
+    /// When to force black-on-white with ANSI colors. `auto` colors only a terminal
+    /// stdout, and not when `NO_COLOR` is set. `--polarity` applies only without colors.
+    #[arg(long, value_enum, default_value_t = ColorWhen::Auto)]
+    color: ColorWhen,
+
     /// Encode a trailing newline from a file or stdin instead of stripping it.
     #[arg(long)]
     keep_newline: bool,
+}
+
+/// Values of --color, following the `ls`/`grep` convention.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum ColorWhen {
+    Auto,
+    Always,
+    Never,
 }
 
 /// CLI mirror of [`termqr::ErrorCorrection`], spelled with the standard single letters.
@@ -112,13 +125,27 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
-    let text = render(&data, args.polarity.into(), args.ec_level.into())?;
+    let ansi = match args.color {
+        ColorWhen::Always => true,
+        ColorWhen::Never => false,
+        ColorWhen::Auto => io::stdout().is_terminal() && !no_color(),
+    };
+    let colors = if ansi {
+        termqr::Colors::Ansi
+    } else {
+        termqr::Colors::Plain
+    };
+    let renderer = termqr::Renderer::new()
+        .error_correction(args.ec_level.into())
+        .polarity(args.polarity.into())
+        .colors(colors);
+    let code = render(&data, renderer)?;
     // Only stdout matters: `terminal_size()` would fall back to stderr or stdin and apply
     // the check to output redirected to a file.
     if let Some((terminal_size::Width(cols), _)) = terminal_size::terminal_size_of(io::stdout()) {
-        check_fits(&text, cols)?;
+        check_fits(&code, cols)?;
     }
-    match writeln!(io::stdout(), "{text}") {
+    match writeln!(io::stdout(), "{code}") {
         // The reader closed early (`termqr | head`); that is not a failure of ours.
         Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
         result => result.context("failed to write to stdout"),
@@ -139,12 +166,8 @@ fn read_limited(reader: impl Read) -> io::Result<Vec<u8>> {
 
 /// Renders `data`, turning a too-long error into one that names the limit and the highest
 /// lower level that would fit, if any.
-fn render(
-    data: &[u8],
-    polarity: termqr::Polarity,
-    level: termqr::ErrorCorrection,
-) -> anyhow::Result<String> {
-    match termqr::render(data, polarity, level) {
+fn render(data: &[u8], renderer: termqr::Renderer) -> anyhow::Result<termqr::Rendered> {
+    match renderer.render(data) {
         Err(termqr::Error::TooLong { len, level }) => {
             let lower = termqr::ErrorCorrection::ALL
                 .into_iter()
@@ -153,7 +176,7 @@ fn render(
             let hint = match lower
                 .into_iter()
                 .rev()
-                .find(|&l| termqr::render(data, polarity, l).is_ok())
+                .find(|&l| renderer.error_correction(l).render(data).is_ok())
             {
                 Some(l) => format!("it fits at --ec-level {l}"),
                 None => "shorten the input".to_owned(),
@@ -168,10 +191,15 @@ fn render(
     }
 }
 
-/// Fails if `text` has a line wider than `terminal_cols`. A wrapped QR code cannot be
-/// scanned, so printing it would only produce garbage.
-fn check_fits(text: &str, terminal_cols: u16) -> anyhow::Result<()> {
-    let width = text.lines().map(|l| l.chars().count()).max().unwrap_or(0);
+/// Whether `NO_COLOR` (<https://no-color.org>) asks for no color: set and non-empty.
+fn no_color() -> bool {
+    std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
+}
+
+/// Fails if `code` is wider than `terminal_cols`. A wrapped QR code cannot be scanned, so
+/// printing it would only produce garbage.
+fn check_fits(code: &termqr::Rendered, terminal_cols: u16) -> anyhow::Result<()> {
+    let width = code.columns();
     if width > usize::from(terminal_cols) {
         anyhow::bail!(
             "qr code is {width} columns wide but the terminal is {terminal_cols}; \
@@ -223,14 +251,12 @@ mod tests {
     #[test]
     fn width_check_boundary() {
         // Version 2 plus quiet zone: 33 columns.
-        let text = termqr::render(
-            "https://example.com",
-            termqr::Polarity::default(),
-            termqr::ErrorCorrection::default(),
-        )
-        .unwrap();
-        assert!(check_fits(&text, 33).is_ok());
-        let err = check_fits(&text, 32).unwrap_err().to_string();
+        let code = termqr::Renderer::new()
+            .colors(termqr::Colors::Ansi)
+            .render("https://example.com")
+            .unwrap();
+        assert!(check_fits(&code, 33).is_ok());
+        let err = check_fits(&code, 32).unwrap_err().to_string();
         assert_eq!(
             err,
             "qr code is 33 columns wide but the terminal is 32; \
