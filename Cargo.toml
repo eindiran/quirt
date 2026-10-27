@@ -53,3 +53,6 @@ unwrap_used = "deny"
 dbg_macro = "deny"
 todo = "warn"
 undocumented_unsafe_blocks = "deny"
+
+[dev-dependencies]
+rqrr = { version = "0.11.0", default-features = false }

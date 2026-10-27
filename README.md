@@ -89,9 +89,18 @@ termqr --man > /usr/local/share/man/man1/termqr.1
 | `--force` | Print even if the code is too wide or tall for the terminal |
 | `--completions SHELL` | Print a completion script (`bash`, `zsh`, `fish`, `elvish`, `powershell`) and exit |
 | `--man` | Print the man page (roff) and exit |
-| `--keep-newline` | Keep a trailing `\n`/`\r\n` from a file or stdin; stripped by default. Conflicts with `TEXT` |
+| `--keep-newline` | Keep a trailing `\n`/`\r\n` from a file or stdin; stripped by default unless the input has NUL bytes. Conflicts with `TEXT` |
 
-Input is encoded as raw bytes. The CLI exits 1 with a message on stderr when:
+Input is encoded as raw bytes, without an ECI header, so the code holds exactly the input's
+encoding. Scanner apps nearly all assume UTF-8 (some guess), so convert other encodings
+first, e.g. `iconv -f SHIFT_JIS -t UTF-8 file | termqr`.
+
+One trailing `\n` or `\r\n` is trimmed from file and stdin input, except when the input
+contains a NUL byte: that marks UTF-16, UTF-32, or binary data, where a final 0x0A can be
+half of a code unit. UTF-16 text with no ASCII characters has no NUL either, so pass
+`--keep-newline` for it.
+
+The CLI exits 1 with a message on stderr when:
 
 | Condition | Message |
 | --- | --- |
@@ -126,7 +135,7 @@ Toolchain is pinned in `rust-toolchain.toml`. Requires `pre-commit`, `cargo-audi
 
 | Command | Action |
 | --- | --- |
-| `make test` | `cargo test --all-features` |
+| `make test` | `cargo test --all-features`; `tests/unicode.rs` decodes output with `rqrr` |
 | `make lint` | clippy with `-D warnings`, then `cargo audit` |
 | `make deny` | `cargo deny check` against `deny.toml` |
 | `make format` | `cargo fmt` |

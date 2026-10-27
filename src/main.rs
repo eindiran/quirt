@@ -70,7 +70,8 @@ struct Args {
     #[arg(long)]
     force: bool,
 
-    /// Encode a trailing newline from a file or stdin instead of stripping it.
+    /// Encode a trailing newline from a file or stdin instead of stripping it. Input with
+    /// NUL bytes (UTF-16, UTF-32, binary) is never stripped.
     #[arg(long, conflicts_with = "text")]
     keep_newline: bool,
 
@@ -399,7 +400,16 @@ fn trimmed(mut data: Vec<u8>, keep_newline: bool) -> Vec<u8> {
 
 /// Removes one trailing `\n` or `\r\n`, as left by `echo` or a text editor. Scanners
 /// would otherwise include it in the decoded text.
+///
+/// Input containing a NUL byte is left alone: that is UTF-16, UTF-32, or binary data, where
+/// a final 0x0A can be half of a code unit (UTF-16BE `"\n"` is `00 0A`, UTF-16LE `" ી"` is
+/// `20 00 C0 0A`). Text in ASCII-compatible encodings never contains NUL. UTF-16 text with
+/// no ASCII characters at all has no NUL either and can still lose a final 0x0A; it needs
+/// `--keep-newline`.
 fn trim_trailing_newline(data: &mut Vec<u8>) {
+    if data.contains(&0) {
+        return;
+    }
     if data.last() == Some(&b'\n') {
         data.pop();
         if data.last() == Some(&b'\r') {
@@ -421,6 +431,10 @@ mod tests {
             (b"a", b"a"),
             (b"a\r", b"a\r"),
             (b"", b""),
+            // UTF-16BE "a\n" and UTF-16LE " \u{0ac0}": 0x0A is part of a code unit.
+            (b"\0a\0\n", b"\0a\0\n"),
+            (b" \0\xc0\x0a", b" \0\xc0\x0a"),
+            (b"a\0b\n", b"a\0b\n"),
         ] {
             let mut data = input.to_vec();
             trim_trailing_newline(&mut data);
