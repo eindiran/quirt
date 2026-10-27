@@ -12,7 +12,9 @@
 use std::fmt;
 use std::num::NonZeroU8;
 
-use qrcode::types::{Color, QrError};
+use qrcode::bits::Bits;
+use qrcode::optimize::{Optimizer, Parser, Segment};
+use qrcode::types::{Color, Mode, QrError, Version};
 use qrcode::{EcLevel, QrCode};
 
 /// Longest input, in bytes, that any QR code can hold: 7089 digits at version 40, level L.
@@ -116,8 +118,9 @@ pub enum Colors {
     /// filled.
     #[default]
     Plain,
-    /// ANSI escapes force black modules on a bright-white background (SGR `30;107`) on
-    /// every line, so the code scans whatever the terminal theme. [`Polarity`] is ignored.
+    /// ANSI escapes force black modules on a bright-white background on every line, so
+    /// the code scans whatever the terminal theme: SGR `30;107` with half blocks, `40` and
+    /// `107` backgrounds with ASCII. [`Polarity`] is ignored.
     Ansi,
 }
 
@@ -238,14 +241,7 @@ impl Renderer {
     /// level, and [`Error::Encode`] for any other encoder failure.
     pub fn render(&self, data: impl AsRef<[u8]>) -> Result<Rendered, Error> {
         let data = data.as_ref();
-        let code = QrCode::with_error_correction_level(data, self.error_correction.into())
-            .map_err(|e| match e {
-                QrError::DataTooLong => Error::TooLong {
-                    len: data.len(),
-                    level: self.error_correction,
-                },
-                other => Error::Encode(other),
-            })?;
+        let code = encode(data, self.error_correction)?;
 
         let modules = code.width();
         let dark = code
@@ -259,6 +255,39 @@ impl Renderer {
             settings: *self,
         })
     }
+}
+
+/// Encodes `data` in the smallest QR version that holds it, using qrcode's segment
+/// optimizer but never Kanji mode. The optimizer puts any byte pair that is valid Shift JIS
+/// into Kanji segments, and scanners decode those as Shift JIS, which garbles UTF-8 text
+/// such as Japanese.
+fn encode(data: &[u8], level: ErrorCorrection) -> Result<QrCode, Error> {
+    let segments: Vec<Segment> = Parser::new(data)
+        .map(|s| match s.mode {
+            Mode::Kanji => Segment {
+                mode: Mode::Byte,
+                ..s
+            },
+            _ => s,
+        })
+        .collect();
+    let ec = level.into();
+    for v in 1..=40 {
+        let version = Version::Normal(v);
+        let mut bits = Bits::new(version);
+        let pushed = bits
+            .push_segments(data, Optimizer::new(segments.iter().copied(), version))
+            .and_then(|()| bits.push_terminator(ec));
+        match pushed {
+            Ok(()) => return QrCode::with_bits(bits, ec).map_err(Error::Encode),
+            Err(QrError::DataTooLong) => {}
+            Err(e) => return Err(Error::Encode(e)),
+        }
+    }
+    Err(Error::TooLong {
+        len: data.len(),
+        level,
+    })
 }
 
 /// SGR black foreground on bright-white background.
@@ -396,10 +425,55 @@ mod tests {
         Renderer::new().error_correction(level).render(data)
     }
 
+    /// Byte-mode reference code for `data`: the smallest version that holds it, built
+    /// without qrcode's segment optimizer.
+    fn byte_mode_code(data: &[u8], level: EcLevel) -> QrCode {
+        (1..=40)
+            .find_map(|v| {
+                let mut bits = Bits::new(Version::Normal(v));
+                bits.push_byte_data(data).ok()?;
+                bits.push_terminator(level).ok()?;
+                QrCode::with_bits(bits, level).ok()
+            })
+            .unwrap()
+    }
+
+    /// `code` drawn the way `Renderer::new()` draws, via qrcode's own renderer.
+    fn dense1x2(code: &QrCode) -> String {
+        use qrcode::render::unicode::Dense1x2;
+        code.render::<Dense1x2>()
+            .dark_color(Dense1x2::Light)
+            .light_color(Dense1x2::Dark)
+            .quiet_zone(true)
+            .build()
+    }
+
+    #[test]
+    fn utf8_text_is_not_kanji_encoded() {
+        // qrcode's optimizer puts byte pairs that look like Shift JIS into Kanji mode, and
+        // scanners decode those as Shift JIS: this text came out as "...隱槭...".
+        let text = "日本語のテキスト".as_bytes();
+        let reference = byte_mode_code(text, EcLevel::M);
+        assert_ne!(
+            dense1x2(&QrCode::new(text).unwrap()),
+            dense1x2(&reference),
+            "qrcode no longer picks Kanji mode here; pick another input"
+        );
+        let ours = Renderer::new().render(text).unwrap();
+        assert_eq!(ours.to_string(), dense1x2(&reference));
+    }
+
     #[test]
     fn plain_matches_qrcode_dense1x2() {
         use qrcode::render::unicode::Dense1x2;
-        for data in ["hello", "https://example.com", "0123456789"] {
+        // Inputs without Shift JIS byte pairs, covering byte, numeric, and alphanumeric
+        // segments, where termqr and qrcode should encode identically.
+        for data in [
+            "hello",
+            "https://example.com",
+            "0123456789",
+            "HTTPS://EXAMPLE.COM/A1",
+        ] {
             let code = QrCode::new(data).unwrap();
             for (polarity, dark, light) in [
                 (Polarity::LightOnDark, Dense1x2::Light, Dense1x2::Dark),
