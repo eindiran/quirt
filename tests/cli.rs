@@ -98,6 +98,20 @@ fn dash_as_text_is_literal() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn non_utf8_text_argument_is_encoded_as_raw_bytes() {
+    use std::os::unix::ffi::OsStrExt;
+    let arg = std::ffi::OsStr::from_bytes(b"\xff\xfe");
+    let out = Command::new(env!("CARGO_BIN_EXE_termqr"))
+        .arg(arg)
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let code = Renderer::new().render(b"\xff\xfe").unwrap();
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("{code}\n"));
+}
+
 #[test]
 fn text_words_are_joined_with_spaces() {
     let out = run(&["hello", "big", "world"], b"");

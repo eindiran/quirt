@@ -32,6 +32,9 @@ does not grow with `scale` or `margin`.
 Scanners need dark modules on a light background. With `Plain`, pick the `Polarity`
 matching the terminal theme; `Ansi` works on any theme.
 
+Data is split into numeric, alphanumeric, and byte segments, never Kanji: scanners decode
+Kanji segments as Shift JIS, which garbles UTF-8 text such as Japanese.
+
 `ErrorCorrection` trades capacity for damage tolerance. The smallest QR version that
 holds the input at that level is used; input that fits no version returns
 `Error::TooLong { len, level }`. `ErrorCorrection::max_bytes()` gives the limits below.
@@ -81,7 +84,7 @@ termqr --man > /usr/local/share/man/man1/termqr.1
 | `--ec-level L\|M\|Q\|H` | Error-correction level, case-insensitive; default `M` |
 | `--margin N` | Quiet zone in modules per side, 1-32; default 4. 0 is refused because the terminal background is not a reliable quiet zone |
 | `--scale N` | Draw each module N columns by N half-lines, 1-16; default 1 |
-| `--ascii` | ASCII only: `##` per module, twice as wide. Chosen automatically on a terminal whose locale (`LC_ALL`, `LC_CTYPE`, `LANG`) is not UTF-8 |
+| `--ascii` | ASCII only: `##` per module, twice as wide. Chosen automatically on a terminal whose locale (`LC_ALL`, `LC_CTYPE`, `LANG`) is not UTF-8; never on Windows |
 | `--unicode` | Half blocks even when the locale is not UTF-8 |
 | `--force` | Print even if the code is too wide or tall for the terminal |
 | `--completions SHELL` | Print a completion script (`bash`, `zsh`, `fish`, `elvish`, `powershell`) and exit |

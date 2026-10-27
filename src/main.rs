@@ -84,8 +84,8 @@ struct Args {
 }
 
 /// Upper bounds for --margin and --scale. Output is checked against the terminal only when
-/// stdout is one, so these keep piped output sane: the largest code at both limits is about
-/// 3900 columns and 22 MB of text.
+/// stdout is one, so these keep piped output sane: the largest code at both limits is 3856
+/// columns and 18 MB of text.
 const MAX_MARGIN: u8 = 32;
 const MAX_SCALE: u8 = 16;
 
@@ -286,16 +286,18 @@ fn term_is_dumb() -> bool {
 }
 
 /// Whether the character-type locale is UTF-8. It is the first non-empty one of `LC_ALL`,
-/// `LC_CTYPE`, and `LANG`; with none set it is POSIX `C`, which is not.
+/// `LC_CTYPE`, and `LANG`; with none set it is POSIX `C`, which is not. Windows consoles
+/// do not use these variables (they are normally unset there), so it counts as UTF-8.
 fn locale_is_utf8() -> bool {
-    ["LC_ALL", "LC_CTYPE", "LANG"]
-        .into_iter()
-        .filter_map(std::env::var_os)
-        .find(|v| !v.is_empty())
-        .is_some_and(|v| {
-            let v = v.to_string_lossy().to_ascii_lowercase();
-            v.contains("utf-8") || v.contains("utf8")
-        })
+    cfg!(windows)
+        || ["LC_ALL", "LC_CTYPE", "LANG"]
+            .into_iter()
+            .filter_map(std::env::var_os)
+            .find(|v| !v.is_empty())
+            .is_some_and(|v| {
+                let v = v.to_string_lossy().to_ascii_lowercase();
+                v.contains("utf-8") || v.contains("utf8")
+            })
 }
 
 /// A flag change the size error can suggest. Variants are only offered when the user's
