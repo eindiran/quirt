@@ -1,5 +1,6 @@
-//! `termqr` command: reads data from a file or stdin and prints it as a QR code.
+//! `termqr` command: prints text from an argument, a file, or stdin as a QR code.
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::PathBuf;
@@ -7,11 +8,18 @@ use std::path::PathBuf;
 use anyhow::Context;
 use clap::{Parser, ValueEnum};
 
-/// Print data from a file or stdin as a QR code in the terminal.
+/// Print text as a QR code in the terminal.
+///
+/// Encodes TEXT if given, else the file from --file, else stdin.
 #[derive(Debug, Parser)]
 #[command(version)]
 struct Args {
-    /// File to encode. Reads stdin when omitted or `-`.
+    /// Text to encode, as given (no newline trimming).
+    #[arg(conflicts_with = "file")]
+    text: Option<OsString>,
+
+    /// File to encode instead of TEXT; `-` reads stdin.
+    #[arg(short, long, value_name = "FILE")]
     file: Option<PathBuf>,
 
     /// Terminal color scheme, which decides which modules are drawn filled.
@@ -22,7 +30,7 @@ struct Args {
     #[arg(long, value_enum, ignore_case = true, default_value_t = EcLevel::M)]
     ec_level: EcLevel,
 
-    /// Encode a trailing newline instead of stripping it.
+    /// Encode a trailing newline from a file or stdin instead of stripping it.
     #[arg(long)]
     keep_newline: bool,
 }
@@ -79,17 +87,21 @@ impl From<Polarity> for termqr::Polarity {
 fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    let mut data = match &args.file {
-        Some(path) if path.as_os_str() != "-" => {
+    let data = match (args.text, &args.file) {
+        // The argument is taken verbatim: a newline in it was put there on purpose.
+        (Some(text), _) => text.into_encoded_bytes(),
+        (None, Some(path)) if path.as_os_str() != "-" => {
             let file = fs::File::open(path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
-            read_limited(file).with_context(|| format!("failed to read {}", path.display()))?
+            let data =
+                read_limited(file).with_context(|| format!("failed to read {}", path.display()))?;
+            trimmed(data, args.keep_newline)
         }
-        _ => read_limited(io::stdin()).context("failed to read stdin")?,
+        (None, _) => trimmed(
+            read_limited(io::stdin()).context("failed to read stdin")?,
+            args.keep_newline,
+        ),
     };
-    if !args.keep_newline {
-        trim_trailing_newline(&mut data);
-    }
     if data.is_empty() {
         anyhow::bail!("input is empty; nothing to encode");
     }
@@ -167,6 +179,14 @@ fn check_fits(text: &str, terminal_cols: u16) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Applies [`trim_trailing_newline`] unless `keep_newline` is set.
+fn trimmed(mut data: Vec<u8>, keep_newline: bool) -> Vec<u8> {
+    if !keep_newline {
+        trim_trailing_newline(&mut data);
+    }
+    data
 }
 
 /// Removes one trailing `\n` or `\r\n`, as left by `echo` or a text editor. Scanners

@@ -37,15 +37,22 @@ cargo install termqr --features cli
 ```
 
 ```bash
-echo "https://example.com" | termqr
+termqr "https://example.com"
 ```
+
+```bash
+pbpaste | termqr
+```
+
+Input comes from `TEXT` if given, else `--file`, else stdin.
 
 | Argument | Effect |
 | --- | --- |
-| `[FILE]` | File to encode; stdin when omitted or `-` |
+| `[TEXT]` | Text to encode, verbatim; use `termqr -- -x` for text starting with `-` |
+| `-f, --file FILE` | File to encode; `-` reads stdin. Conflicts with `TEXT` |
 | `--polarity 0\|1` | `0` (default): light-on-dark theme; `1`: dark-on-light theme |
 | `--ec-level L\|M\|Q\|H` | Error-correction level, case-insensitive; default `M` |
-| `--keep-newline` | Encode the trailing `\n`/`\r\n`; stripped by default |
+| `--keep-newline` | Keep a trailing `\n`/`\r\n` from a file or stdin; stripped by default |
 
 Input is encoded as raw bytes. The CLI exits 1 with a message on stderr when:
 

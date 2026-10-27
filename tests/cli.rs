@@ -42,7 +42,7 @@ fn stdin_strips_trailing_newline() {
 
 #[test]
 fn keep_newline_encodes_it() {
-    let out = run(&["--keep-newline", "-"], b"hello\n");
+    let out = run(&["--keep-newline", "-f", "-"], b"hello\n");
     assert!(out.status.success());
     assert_eq!(
         String::from_utf8(out.stdout).unwrap(),
@@ -54,7 +54,7 @@ fn keep_newline_encodes_it() {
 fn reads_file_with_polarity() {
     let path = std::env::temp_dir().join(format!("termqr-cli-{}.txt", std::process::id()));
     std::fs::write(&path, "from file\n").unwrap();
-    let out = run(&["--polarity", "1", path.to_str().unwrap()], b"");
+    let out = run(&["--polarity", "1", "-f", path.to_str().unwrap()], b"");
     let _ = std::fs::remove_file(&path); // best-effort cleanup of a temp file
     assert!(out.status.success());
     assert_eq!(
@@ -65,10 +65,49 @@ fn reads_file_with_polarity() {
 
 #[test]
 fn missing_file_fails_with_path_in_message() {
-    let out = run(&["/nonexistent/termqr-input"], b"");
+    let out = run(&["--file", "/nonexistent/termqr-input"], b"");
     assert!(!out.status.success());
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(stderr.contains("failed to read /nonexistent/termqr-input"));
+}
+
+#[test]
+fn text_argument_is_encoded_verbatim() {
+    // stdin is ignored when TEXT is given, and a trailing newline in TEXT is kept.
+    for text in ["https://example.com", "hello\n"] {
+        let out = run(&[text], b"ignored");
+        assert!(out.status.success());
+        assert_eq!(
+            String::from_utf8(out.stdout).unwrap(),
+            expected(text, Polarity::LightOnDark, ErrorCorrection::Medium)
+        );
+    }
+}
+
+#[test]
+fn dash_as_text_is_literal() {
+    let out = run(&["--", "-"], b"ignored");
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        expected("-", Polarity::LightOnDark, ErrorCorrection::Medium)
+    );
+}
+
+#[test]
+fn text_and_file_conflict() {
+    let out = run(&["hello", "-f", "/etc/hosts"], b"");
+    assert!(!out.status.success());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("cannot be used with"));
+}
+
+#[test]
+fn empty_text_argument_is_an_error() {
+    let out = run(&[""], b"ignored");
+    assert!(!out.status.success());
+    let stderr = String::from_utf8(out.stderr).unwrap();
+    assert!(stderr.contains("input is empty; nothing to encode"));
 }
 
 #[test]
