@@ -133,7 +133,14 @@ fn margin_flag_matches_library() {
     assert!(out.status.success());
     let code = Renderer::new().margin(1).render("hello").unwrap();
     assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("{code}\n"));
-    assert!(!run(&["--margin", "256", "hello"], b"").status.success());
+    assert!(run(&["--margin", "32", "hello"], b"").status.success());
+    let out = run(&["--margin", "33", "hello"], b"");
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8(out.stderr)
+            .unwrap()
+            .contains("33 is not in 0..=32")
+    );
 }
 
 #[test]
@@ -146,6 +153,14 @@ fn scale_flag_matches_library() {
         .unwrap();
     assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("{code}\n"));
     assert!(!run(&["--scale", "0", "hello"], b"").status.success());
+    assert!(run(&["--scale", "16", "hello"], b"").status.success());
+    let out = run(&["--scale", "17", "hello"], b"");
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8(out.stderr)
+            .unwrap()
+            .contains("17 is not in 1..=16")
+    );
 }
 
 #[test]
@@ -190,6 +205,36 @@ fn generators_are_exclusive() {
         !run(&["--completions", "bash", "--ascii"], b"")
             .status
             .success()
+    );
+}
+
+#[test]
+fn largest_output_streams_through_a_closed_pipe() {
+    // Largest code at both limits, piped into a reader that stops at once: termqr must
+    // exit cleanly, without first building the ~22 MB of text.
+    let mut child = Command::new(env!("CARGO_BIN_EXE_termqr"))
+        .args([
+            "--scale",
+            "16",
+            "--margin",
+            "32",
+            "--ec-level",
+            "L",
+            "--file",
+            "-",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(&[0u8; 2953]).unwrap();
+    drop(child.stdout.take());
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }
 

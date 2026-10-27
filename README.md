@@ -17,6 +17,8 @@ println!("{code}");
 ```
 
 `render` returns a `Rendered` with `columns()` and `lines()`, which exclude ANSI escapes.
+It keeps only the module grid; `Display` produces the text one line at a time, so memory
+does not grow with `scale` or `margin`.
 
 | Setting | Values | Default |
 | --- | --- | --- |
@@ -77,8 +79,8 @@ termqr --man > /usr/local/share/man/man1/termqr.1
 | `--invert` | Without colors, fill dark modules instead of light ones; for light-background terminals |
 | `--color auto\|always\|never` | Force black-on-white with ANSI colors. `auto` (default) colors only a terminal stdout, and not when `NO_COLOR` is set |
 | `--ec-level L\|M\|Q\|H` | Error-correction level, case-insensitive; default `M` |
-| `--margin N` | Quiet zone in modules per side, 0-255; default 4 |
-| `--scale N` | Draw each module N columns by N half-lines, 1-255; default 1 |
+| `--margin N` | Quiet zone in modules per side, 0-32; default 4 |
+| `--scale N` | Draw each module N columns by N half-lines, 1-16; default 1 |
 | `--ascii` | ASCII only: `##` per module, twice as wide |
 | `--force` | Print even if the code is too wide or tall for the terminal |
 | `--completions SHELL` | Print a completion script (`bash`, `zsh`, `fish`, `elvish`, `powershell`) and exit |

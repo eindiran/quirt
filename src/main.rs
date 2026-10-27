@@ -41,13 +41,17 @@ struct Args {
     #[arg(long, value_enum, default_value_t = ColorWhen::Auto)]
     color: ColorWhen,
 
-    /// Quiet zone in modules on each side. The spec requires 4; most scanners read 1-2.
-    #[arg(long, value_name = "N", default_value_t = termqr::DEFAULT_MARGIN)]
+    /// Quiet zone in modules on each side, 0-32. The spec requires 4; most scanners read
+    /// 1-2.
+    #[arg(long, value_name = "N", default_value_t = termqr::DEFAULT_MARGIN,
+          value_parser = clap::value_parser!(u8).range(0..=i64::from(MAX_MARGIN)))]
     margin: u8,
 
-    /// Draw each module N columns wide and N half-lines tall, to scan from farther away.
-    #[arg(long, value_name = "N", default_value_t = NonZeroU8::MIN)]
-    scale: NonZeroU8,
+    /// Draw each module N columns wide and N half-lines tall, 1-16, to scan from farther
+    /// away.
+    #[arg(long, value_name = "N", default_value_t = 1,
+          value_parser = clap::value_parser!(u8).range(1..=i64::from(MAX_SCALE)))]
+    scale: u8,
 
     /// Draw with ASCII only (`##` per module, twice as wide). For non-UTF-8 terminals and
     /// terminals that draw block characters two columns wide.
@@ -70,6 +74,12 @@ struct Args {
     #[arg(long, exclusive = true)]
     man: bool,
 }
+
+/// Upper bounds for --margin and --scale. Output is checked against the terminal only when
+/// stdout is one, so these keep piped output sane: the largest code at both limits is about
+/// 3900 columns and 22 MB of text.
+const MAX_MARGIN: u8 = 32;
+const MAX_SCALE: u8 = 16;
 
 /// Values of --color, following the `ls`/`grep` convention.
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -166,7 +176,7 @@ fn main() -> anyhow::Result<()> {
         })
         .colors(colors)
         .margin(args.margin)
-        .scale(args.scale)
+        .scale(NonZeroU8::new(args.scale).expect("clap enforces scale >= 1"))
         .glyphs(if args.ascii {
             termqr::Glyphs::Ascii
         } else {
@@ -181,10 +191,17 @@ fn main() -> anyhow::Result<()> {
     {
         check_fits(&code, cols, rows)?;
     }
-    write_stdout(format!("{code}\n").as_bytes())
+    // Streams line by line; a code at the size limits is tens of MB of text.
+    let mut out = io::BufWriter::new(io::stdout().lock());
+    let result = writeln!(out, "{code}").and_then(|()| out.flush());
+    match result {
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
+        result => result.context("failed to write to stdout"),
+    }
 }
 
-/// Writes `bytes` to stdout, treating a closed pipe (`termqr | head`) as success.
+/// Writes `bytes` to stdout, treating a closed pipe (`termqr | head`) as success. The
+/// streamed QR output handles a closed pipe the same way.
 fn write_stdout(bytes: &[u8]) -> anyhow::Result<()> {
     match io::stdout().write_all(bytes) {
         Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),

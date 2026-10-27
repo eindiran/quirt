@@ -246,86 +246,15 @@ impl Renderer {
             })?;
 
         let modules = code.width();
-        let dark = code.to_colors();
-        let margin = usize::from(self.margin);
-        let scale = usize::from(self.scale.get());
-        // Side of the bordered, scaled grid in cells. A cell is one column by half a line with
-        // half blocks, two columns by one line with ASCII.
-        let size = (modules + 2 * margin) * scale;
-        // Whether cell (x, y) gets a filled glyph. Rows past the bottom (the odd half of the
-        // last line) are never filled, so they show the background.
-        let filled = |x: usize, y: usize| -> bool {
-            if y >= size {
-                return false;
-            }
-            let (x, y) = (x / scale, y / scale);
-            let is_dark = x >= margin
-                && y >= margin
-                && x < margin + modules
-                && y < margin + modules
-                && dark[(y - margin) * modules + (x - margin)] == Color::Dark;
-            match (self.colors, self.polarity) {
-                (Colors::Ansi, _) | (Colors::Plain, Polarity::DarkOnLight) => is_dark,
-                (Colors::Plain, Polarity::LightOnDark) => !is_dark,
-            }
-        };
-
-        let mut text = String::new();
-        let (columns, lines) = match self.glyphs {
-            Glyphs::HalfBlock => {
-                let lines = size.div_ceil(2);
-                for line in 0..lines {
-                    if line > 0 {
-                        text.push('\n');
-                    }
-                    if self.colors == Colors::Ansi {
-                        text.push_str(ANSI_DARK_ON_LIGHT);
-                    }
-                    for x in 0..size {
-                        text.push(match (filled(x, 2 * line), filled(x, 2 * line + 1)) {
-                            (true, true) => '\u{2588}',
-                            (true, false) => '\u{2580}',
-                            (false, true) => '\u{2584}',
-                            (false, false) => ' ',
-                        });
-                    }
-                    if self.colors == Colors::Ansi {
-                        text.push_str(ANSI_RESET);
-                    }
-                }
-                (size, lines)
-            }
-            Glyphs::Ascii => {
-                for y in 0..size {
-                    if y > 0 {
-                        text.push('\n');
-                    }
-                    if self.colors == Colors::Ansi {
-                        // `#` leaves gaps in its cell, so color spaces instead; an escape
-                        // is emitted only where the color changes.
-                        let mut current = None;
-                        for x in 0..size {
-                            let dark = filled(x, y);
-                            if current != Some(dark) {
-                                text.push_str(if dark { ANSI_BG_BLACK } else { ANSI_BG_WHITE });
-                                current = Some(dark);
-                            }
-                            text.push_str("  ");
-                        }
-                        text.push_str(ANSI_RESET);
-                    } else {
-                        for x in 0..size {
-                            text.push_str(if filled(x, y) { "##" } else { "  " });
-                        }
-                    }
-                }
-                (2 * size, size)
-            }
-        };
+        let dark = code
+            .to_colors()
+            .into_iter()
+            .map(|c| c == Color::Dark)
+            .collect();
         Ok(Rendered {
-            text,
-            columns,
-            lines,
+            dark,
+            modules,
+            settings: *self,
         })
     }
 }
@@ -337,43 +266,123 @@ const ANSI_RESET: &str = "\x1b[0m";
 const ANSI_BG_BLACK: &str = "\x1b[40m";
 const ANSI_BG_WHITE: &str = "\x1b[107m";
 
-/// A rendered code. `Display` prints the text; the size accessors exclude ANSI escapes.
+/// A rendered code. It holds only the module grid and produces text on demand, one line
+/// at a time, so `Display` output of any scale needs memory for one line only. Size
+/// accessors exclude ANSI escapes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Rendered {
-    text: String,
-    columns: usize,
-    lines: usize,
+    /// Row-major, `modules * modules`, `true` for dark.
+    dark: Vec<bool>,
+    modules: usize,
+    settings: Renderer,
 }
 
 impl Rendered {
-    /// The rendered text, including any ANSI escapes.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.text
-    }
-
     /// Width in terminal columns.
     #[must_use]
     pub fn columns(&self) -> usize {
-        self.columns
+        match self.settings.glyphs {
+            Glyphs::HalfBlock => self.cells(),
+            Glyphs::Ascii => 2 * self.cells(),
+        }
     }
 
     /// Height in lines.
     #[must_use]
     pub fn lines(&self) -> usize {
-        self.lines
+        match self.settings.glyphs {
+            Glyphs::HalfBlock => self.cells().div_ceil(2),
+            Glyphs::Ascii => self.cells(),
+        }
     }
 
-    /// Consumes the code, returning its text.
-    #[must_use]
-    pub fn into_string(self) -> String {
-        self.text
+    /// Side of the bordered, scaled grid in cells. A cell is one column by half a line
+    /// with half blocks, two columns by one line with ASCII.
+    fn cells(&self) -> usize {
+        let margin = usize::from(self.settings.margin);
+        (self.modules + 2 * margin) * usize::from(self.settings.scale.get())
+    }
+
+    /// Whether cell (x, y) gets a filled glyph. Rows past the bottom (the odd half of the
+    /// last half-block line) are never filled, so they show the background.
+    fn filled(&self, x: usize, y: usize) -> bool {
+        if y >= self.cells() {
+            return false;
+        }
+        let scale = usize::from(self.settings.scale.get());
+        let margin = usize::from(self.settings.margin);
+        let (x, y) = (x / scale, y / scale);
+        let modules = self.modules;
+        let is_dark = x >= margin
+            && y >= margin
+            && x < margin + modules
+            && y < margin + modules
+            && self.dark[(y - margin) * modules + (x - margin)];
+        match (self.settings.colors, self.settings.polarity) {
+            (Colors::Ansi, _) | (Colors::Plain, Polarity::DarkOnLight) => is_dark,
+            (Colors::Plain, Polarity::LightOnDark) => !is_dark,
+        }
+    }
+
+    /// Appends output line `line` (without newline) to `out`.
+    fn push_line(&self, line: usize, out: &mut String) {
+        let cells = self.cells();
+        let ansi = self.settings.colors == Colors::Ansi;
+        match self.settings.glyphs {
+            Glyphs::HalfBlock => {
+                if ansi {
+                    out.push_str(ANSI_DARK_ON_LIGHT);
+                }
+                for x in 0..cells {
+                    out.push(
+                        match (self.filled(x, 2 * line), self.filled(x, 2 * line + 1)) {
+                            (true, true) => '\u{2588}',
+                            (true, false) => '\u{2580}',
+                            (false, true) => '\u{2584}',
+                            (false, false) => ' ',
+                        },
+                    );
+                }
+                if ansi {
+                    out.push_str(ANSI_RESET);
+                }
+            }
+            Glyphs::Ascii if ansi => {
+                // `#` leaves gaps in its cell, so color spaces instead; an escape is
+                // emitted only where the color changes.
+                let mut current = None;
+                for x in 0..cells {
+                    let dark = self.filled(x, line);
+                    if current != Some(dark) {
+                        out.push_str(if dark { ANSI_BG_BLACK } else { ANSI_BG_WHITE });
+                        current = Some(dark);
+                    }
+                    out.push_str("  ");
+                }
+                out.push_str(ANSI_RESET);
+            }
+            Glyphs::Ascii => {
+                for x in 0..cells {
+                    out.push_str(if self.filled(x, line) { "##" } else { "  " });
+                }
+            }
+        }
     }
 }
 
+/// Writes the lines joined with `\n`, with no trailing newline.
 impl fmt::Display for Rendered {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.text)
+        let mut buf = String::new();
+        for line in 0..self.lines() {
+            if line > 0 {
+                f.write_str("\n")?;
+            }
+            buf.clear();
+            self.push_line(line, &mut buf);
+            f.write_str(&buf)?;
+        }
+        Ok(())
     }
 }
 
@@ -401,7 +410,7 @@ mod tests {
                     .quiet_zone(true)
                     .build();
                 let ours = Renderer::new().polarity(polarity).render(data).unwrap();
-                assert_eq!(ours.as_str(), reference);
+                assert_eq!(ours.to_string(), reference);
             }
         }
     }
@@ -412,8 +421,8 @@ mod tests {
         let code = Renderer::new().render("hello").unwrap();
         assert_eq!(code.columns(), 29);
         assert_eq!(code.lines(), 15);
-        assert!(code.as_str().lines().all(|l| l.chars().count() == 29));
-        assert_eq!(code.as_str().lines().count(), 15);
+        assert!(code.to_string().lines().all(|l| l.chars().count() == 29));
+        assert_eq!(code.to_string().lines().count(), 15);
     }
 
     #[test]
@@ -426,7 +435,7 @@ mod tests {
         // With LightOnDark the quiet zone is filled, so margin 1 gives a filled first row.
         let code = Renderer::new().margin(1).render("hello").unwrap();
         assert!(
-            code.as_str()
+            code.to_string()
                 .lines()
                 .next()
                 .unwrap()
@@ -445,14 +454,14 @@ mod tests {
         // 29 cells per side at scale 1; lines hold two cells.
         let three = scaled(3);
         assert_eq!((three.columns(), three.lines()), (87, 44));
-        for line in three.as_str().lines() {
+        for line in three.to_string().lines() {
             let chars: Vec<char> = line.chars().collect();
             assert!(chars.chunks(3).all(|g| g.iter().all(|&c| c == g[0])));
         }
         // At scale 2 each line is exactly one module row, so no half blocks appear.
         let two = scaled(2);
         assert_eq!(two.lines(), 29);
-        assert!(!two.as_str().contains(['\u{2580}', '\u{2584}']));
+        assert!(!two.to_string().contains(['\u{2580}', '\u{2584}']));
     }
 
     #[test]
@@ -467,9 +476,13 @@ mod tests {
             .render("hello")
             .unwrap();
         assert_eq!((ascii.columns(), ascii.lines()), (58, 29));
-        assert!(ascii.as_str().is_ascii());
-        let half: Vec<Vec<char>> = half.as_str().lines().map(|l| l.chars().collect()).collect();
-        for (y, line) in ascii.as_str().lines().enumerate() {
+        assert!(ascii.to_string().is_ascii());
+        let half: Vec<Vec<char>> = half
+            .to_string()
+            .lines()
+            .map(|l| l.chars().collect())
+            .collect();
+        for (y, line) in ascii.to_string().lines().enumerate() {
             let line = line.as_bytes();
             for x in 0..29 {
                 let glyph = half[y / 2][x];
@@ -492,14 +505,39 @@ mod tests {
             .colors(Colors::Ansi)
             .render("hello")
             .unwrap();
-        assert!(code.as_str().is_ascii());
-        assert!(!code.as_str().contains('#'));
+        assert!(code.to_string().is_ascii());
+        assert!(!code.to_string().contains('#'));
         // The first line is all quiet zone: one white run, then the reset.
-        let first = code.as_str().lines().next().unwrap();
+        let text = code.to_string();
+        let first = text.lines().next().unwrap();
         assert_eq!(
             first,
             format!("{ANSI_BG_WHITE}{}{ANSI_RESET}", " ".repeat(58))
         );
+    }
+
+    #[test]
+    fn display_writes_one_line_at_a_time() {
+        // Records the largest single write, so the test fails if `Display` ever buffers
+        // the whole code.
+        struct MaxChunk(usize);
+        impl fmt::Write for MaxChunk {
+            fn write_str(&mut self, s: &str) -> fmt::Result {
+                self.0 = self.0.max(s.len());
+                Ok(())
+            }
+        }
+        let code = Renderer::new()
+            .scale(NonZeroU8::new(16).unwrap())
+            .colors(Colors::Ansi)
+            .render("hello")
+            .unwrap();
+        let mut sink = MaxChunk(0);
+        fmt::write(&mut sink, format_args!("{code}")).unwrap();
+        // At most one line: escapes plus `columns` glyphs of up to 3 UTF-8 bytes each.
+        let line_bytes = ANSI_DARK_ON_LIGHT.len() + 3 * code.columns() + ANSI_RESET.len();
+        assert!(sink.0 <= line_bytes);
+        assert!(code.to_string().len() > 100 * line_bytes);
     }
 
     #[test]
@@ -516,7 +554,7 @@ mod tests {
             (ansi.columns(), ansi.lines()),
             (plain.columns(), plain.lines())
         );
-        for (a, p) in ansi.as_str().lines().zip(plain.as_str().lines()) {
+        for (a, p) in ansi.to_string().lines().zip(plain.to_string().lines()) {
             assert_eq!(a, format!("{ANSI_DARK_ON_LIGHT}{p}{ANSI_RESET}"));
         }
     }
@@ -525,8 +563,14 @@ mod tests {
     fn ansi_ignores_polarity() {
         let r = Renderer::new().colors(Colors::Ansi);
         assert_eq!(
-            r.polarity(Polarity::LightOnDark).render("hello").unwrap(),
-            r.polarity(Polarity::DarkOnLight).render("hello").unwrap()
+            r.polarity(Polarity::LightOnDark)
+                .render("hello")
+                .unwrap()
+                .to_string(),
+            r.polarity(Polarity::DarkOnLight)
+                .render("hello")
+                .unwrap()
+                .to_string()
         );
     }
 
