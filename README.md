@@ -87,6 +87,15 @@ Input is read only up to `MAX_DATA_LEN` plus a trailing `\r\n` and one byte, so 
 input such as `yes | termqr` fails immediately. The size checks look only at stdout, so
 `termqr > out.txt` from a terminal is not checked.
 
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| Code is stretched to about twice its width | The terminal draws East Asian Ambiguous characters (`█▀▄`) two columns wide, as with iTerm2's "Treat ambiguous-width characters as double width" or VTE's `ambiguous-width = wide`. Terminals do not report this, so the width check also undercounts | `--ascii` |
+| Thin lines between rows | Line spacing above 1.0 separates the half blocks | Set line spacing to 1.0, or `--ascii --color always` (colored spaces) |
+| Garbled characters | Terminal or locale is not UTF-8 | `--ascii` |
+| Scans fail on a light theme with `--color never` | Light modules are filled by default | `--invert`, or keep colors on |
+
 ## Development
 
 Toolchain is pinned in `rust-toolchain.toml`. Requires `pre-commit`, `cargo-audit`,
