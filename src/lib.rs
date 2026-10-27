@@ -184,7 +184,9 @@ impl Renderer {
     }
 
     /// Sets the quiet zone, in modules on each side. The spec requires 4; most scanners
-    /// read 1 or 2, which saves space in small terminals.
+    /// read 1 or 2, which saves space in small terminals. With 0 the code touches the
+    /// terminal background, which scanners read as part of the code unless it is light and
+    /// colors are [`Colors::Ansi`] or polarity is [`Polarity::DarkOnLight`].
     #[must_use]
     pub fn margin(mut self, modules: u8) -> Self {
         self.margin = modules;

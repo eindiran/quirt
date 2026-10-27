@@ -134,12 +134,19 @@ fn margin_flag_matches_library() {
     let code = Renderer::new().margin(1).render("hello").unwrap();
     assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("{code}\n"));
     assert!(run(&["--margin", "32", "hello"], b"").status.success());
+    let out = run(&["--margin", "0", "hello"], b"");
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8(out.stderr)
+            .unwrap()
+            .contains("0 is not in 1..=32")
+    );
     let out = run(&["--margin", "33", "hello"], b"");
     assert!(!out.status.success());
     assert!(
         String::from_utf8(out.stderr)
             .unwrap()
-            .contains("33 is not in 0..=32")
+            .contains("33 is not in 1..=32")
     );
 }
 

@@ -27,7 +27,7 @@ does not grow with `scale` or `margin`.
 | `error_correction` | See below | `Medium` |
 | `glyphs` | `HalfBlock`: Unicode half blocks. `Ascii`: `##` per module, twice as wide; colored spaces with `Ansi` | `HalfBlock` |
 | `scale` | Columns and half-lines per module (`NonZeroU8`); the margin scales too | 1 |
-| `margin` | Quiet zone in modules per side (`u8`). The spec requires 4; most scanners read 1-2 | `DEFAULT_MARGIN` (4) |
+| `margin` | Quiet zone in modules per side (`u8`). The spec requires 4; most scanners read 1-2. 0 scans only on a light background with `Ansi` or `DarkOnLight` | `DEFAULT_MARGIN` (4) |
 
 Scanners need dark modules on a light background. With `Plain`, pick the `Polarity`
 matching the terminal theme; `Ansi` works on any theme.
@@ -79,7 +79,7 @@ termqr --man > /usr/local/share/man/man1/termqr.1
 | `--invert` | Plain glyphs with dark modules filled, for light-background terminals. Turns off `--color auto`; no effect with `--color always` |
 | `--color auto\|always\|never` | Force black-on-white with ANSI colors. `auto` (default) colors only a terminal stdout, and not when `NO_COLOR` is set or `--invert` is given |
 | `--ec-level L\|M\|Q\|H` | Error-correction level, case-insensitive; default `M` |
-| `--margin N` | Quiet zone in modules per side, 0-32; default 4 |
+| `--margin N` | Quiet zone in modules per side, 1-32; default 4. 0 is refused because the terminal background is not a reliable quiet zone |
 | `--scale N` | Draw each module N columns by N half-lines, 1-16; default 1 |
 | `--ascii` | ASCII only: `##` per module, twice as wide |
 | `--force` | Print even if the code is too wide or tall for the terminal |

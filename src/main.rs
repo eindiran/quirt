@@ -41,10 +41,10 @@ struct Args {
     #[arg(long, value_enum, default_value_t = ColorWhen::Auto)]
     color: ColorWhen,
 
-    /// Quiet zone in modules on each side, 0-32. The spec requires 4; most scanners read
-    /// 1-2.
+    /// Quiet zone in modules on each side, 1-32. The spec requires 4; most scanners read
+    /// 1-2. 0 is refused: the terminal background cannot stand in for it.
     #[arg(long, value_name = "N", default_value_t = termqr::DEFAULT_MARGIN,
-          value_parser = clap::value_parser!(u8).range(0..=i64::from(MAX_MARGIN)))]
+          value_parser = clap::value_parser!(u8).range(1..=i64::from(MAX_MARGIN)))]
     margin: u8,
 
     /// Draw each module N columns wide and N half-lines tall, 1-16, to scan from farther
