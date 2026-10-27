@@ -357,6 +357,8 @@ mod pty {
     use std::os::unix::ffi::OsStrExt;
     use std::process::{Command, Output, Stdio};
 
+    use termqr::{Polarity, Renderer};
+
     use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
     use rustix::termios::{Winsize, tcsetwinsize};
 
@@ -430,6 +432,19 @@ mod pty {
         let (ok, out) = run_on_terminal(&["hello"], &[]).unwrap();
         assert!(ok);
         assert!(out.starts_with(b"\x1b[30;107m"));
+    }
+
+    #[test]
+    fn invert_turns_off_auto_color_on_terminal() {
+        let (ok, out) = run_on_terminal(&["--invert", "hello"], &[]).unwrap();
+        assert!(ok);
+        let expected = Renderer::new()
+            .polarity(Polarity::DarkOnLight)
+            .render("hello")
+            .unwrap()
+            .to_string()
+            .replace('\n', "\r\n");
+        assert_eq!(String::from_utf8(out).unwrap(), format!("{expected}\r\n"));
     }
 
     #[test]

@@ -27,8 +27,8 @@ struct Args {
     #[arg(short, long, value_name = "FILE")]
     file: Option<PathBuf>,
 
-    /// Without colors, fill dark modules instead of light ones. Use on light-background
-    /// terminals.
+    /// Draw plain glyphs with dark modules filled, for light-background terminals. Turns off
+    /// `--color auto`; has no effect with `--color always`.
     #[arg(long)]
     invert: bool,
 
@@ -37,7 +37,7 @@ struct Args {
     ec_level: EcLevel,
 
     /// When to force black-on-white with ANSI colors. `auto` colors only a terminal
-    /// stdout, and not when `NO_COLOR` is set. `--invert` applies only without colors.
+    /// stdout, and not when `NO_COLOR` is set or `--invert` is given.
     #[arg(long, value_enum, default_value_t = ColorWhen::Auto)]
     color: ColorWhen,
 
@@ -160,7 +160,8 @@ fn main() -> anyhow::Result<()> {
     let ansi = match args.color {
         ColorWhen::Always => true,
         ColorWhen::Never => false,
-        ColorWhen::Auto => io::stdout().is_terminal() && !no_color(),
+        // --invert only means something for plain glyphs, so asking for it opts out.
+        ColorWhen::Auto => !args.invert && io::stdout().is_terminal() && !no_color(),
     };
     let colors = if ansi {
         termqr::Colors::Ansi

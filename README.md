@@ -76,8 +76,8 @@ termqr --man > /usr/local/share/man/man1/termqr.1
 | --- | --- |
 | `[TEXT]` | Text to encode, verbatim; use `termqr -- -x` for text starting with `-` |
 | `-f, --file FILE` | File to encode; `-` reads stdin. Conflicts with `TEXT` |
-| `--invert` | Without colors, fill dark modules instead of light ones; for light-background terminals |
-| `--color auto\|always\|never` | Force black-on-white with ANSI colors. `auto` (default) colors only a terminal stdout, and not when `NO_COLOR` is set |
+| `--invert` | Plain glyphs with dark modules filled, for light-background terminals. Turns off `--color auto`; no effect with `--color always` |
+| `--color auto\|always\|never` | Force black-on-white with ANSI colors. `auto` (default) colors only a terminal stdout, and not when `NO_COLOR` is set or `--invert` is given |
 | `--ec-level L\|M\|Q\|H` | Error-correction level, case-insensitive; default `M` |
 | `--margin N` | Quiet zone in modules per side, 0-32; default 4 |
 | `--scale N` | Draw each module N columns by N half-lines, 1-16; default 1 |
@@ -108,7 +108,7 @@ input such as `yes | termqr` fails immediately. The size checks look only at std
 | Code is stretched to about twice its width | The terminal draws East Asian Ambiguous characters (`█▀▄`) two columns wide, as with iTerm2's "Treat ambiguous-width characters as double width" or VTE's `ambiguous-width = wide`. Terminals do not report this, so the width check also undercounts | `--ascii` |
 | Thin lines between rows | Line spacing above 1.0 separates the half blocks | Set line spacing to 1.0, or `--ascii --color always` (colored spaces) |
 | Garbled characters | Terminal or locale is not UTF-8 | `--ascii` |
-| Scans fail on a light theme with `--color never` | Light modules are filled by default | `--invert`, or keep colors on |
+| Scans fail on a light theme with `--color never` | Light modules are filled by default | `--invert`, or drop `--color never` |
 
 ## Development
 
