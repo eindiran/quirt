@@ -1,0 +1,48 @@
+---
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: trailing-whitespace
+  - repo: https://github.com/adrienverge/yamllint
+    rev: v1.38.0
+    hooks:
+      - id: yamllint
+        args: [--strict]
+  - repo: local
+    hooks:
+      - id: cargo-fmt
+        name: cargo fmt --check
+        entry: make format-check
+        language: system
+        pass_filenames: false
+        files: \.rs$
+      - id: cargo-lint
+        name: clippy and cargo audit
+        entry: make lint
+        language: system
+        pass_filenames: false
+        files: (\.rs|Cargo\.(toml|lock)|clippy\.toml)$
+      - id: cargo-deny
+        name: cargo deny check
+        entry: make deny
+        language: system
+        pass_filenames: false
+        files: (Cargo\.(toml|lock)|deny\.toml)$
+      - id: cargo-test
+        name: cargo test
+        entry: make test
+        language: system
+        pass_filenames: false
+        files: (\.rs|Cargo\.(toml|lock))$
+      - id: checkmake
+        name: checkmake
+        entry: checkmake
+        language: system
+        files: ^Makefile$

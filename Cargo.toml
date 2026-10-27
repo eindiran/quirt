@@ -1,0 +1,41 @@
+[package]
+name = "termqr"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Display QR codes in a terminal emulator"
+license = "MIT"
+repository = "https://github.com/eindiran/termqr"
+readme = "README.md"
+keywords = ["qr", "qrcode", "terminal", "cli"]
+categories = ["command-line-interface", "encoding"]
+
+[dependencies]
+# Encoder only; default features pull in the image/svg renderers, which are not used here.
+qrcode = { version = "0.14.1", default-features = false }
+thiserror = "2.0.21"
+# CLI-only dependencies, behind the `cli` feature so library users do not pull them in.
+anyhow = { version = "1.0.104", optional = true }
+clap = { version = "4.6.7", features = ["derive"], optional = true }
+# Reads the stdout terminal width so the CLI can refuse codes that would wrap.
+terminal_size = { version = "0.4.4", optional = true }
+
+[features]
+cli = ["dep:anyhow", "dep:clap", "dep:terminal_size"]
+
+[[bin]]
+name = "termqr"
+path = "src/main.rs"
+required-features = ["cli"]
+
+[lints.rust]
+unsafe_code = "deny"
+unsafe_op_in_unsafe_fn = "deny"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+dbg_macro = "deny"
+todo = "warn"
+undocumented_unsafe_blocks = "deny"
