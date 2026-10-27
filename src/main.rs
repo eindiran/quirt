@@ -81,30 +81,78 @@ fn main() -> anyhow::Result<()> {
 
     let mut data = match &args.file {
         Some(path) if path.as_os_str() != "-" => {
-            fs::read(path).with_context(|| format!("failed to read {}", path.display()))?
+            let file = fs::File::open(path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+            read_limited(file).with_context(|| format!("failed to read {}", path.display()))?
         }
-        _ => {
-            let mut buf = Vec::new();
-            io::stdin()
-                .read_to_end(&mut buf)
-                .context("failed to read stdin")?;
-            buf
-        }
+        _ => read_limited(io::stdin()).context("failed to read stdin")?,
     };
     if !args.keep_newline {
         trim_trailing_newline(&mut data);
     }
+    if data.is_empty() {
+        anyhow::bail!("input is empty; nothing to encode");
+    }
+    if data.len() > termqr::MAX_DATA_LEN {
+        anyhow::bail!(
+            "input is longer than {} bytes, more than any qr code holds",
+            termqr::MAX_DATA_LEN
+        );
+    }
 
-    let text = termqr::render(&data, args.polarity.into(), args.ec_level.into())
-        .context("failed to render input")?;
-    // Only a terminal wraps lines; piped or redirected output is written as-is.
-    if let Some((terminal_size::Width(cols), _)) = terminal_size::terminal_size() {
+    let text = render(&data, args.polarity.into(), args.ec_level.into())?;
+    // Only stdout matters: `terminal_size()` would fall back to stderr or stdin and apply
+    // the check to output redirected to a file.
+    if let Some((terminal_size::Width(cols), _)) = terminal_size::terminal_size_of(io::stdout()) {
         check_fits(&text, cols)?;
     }
     match writeln!(io::stdout(), "{text}") {
         // The reader closed early (`termqr | head`); that is not a failure of ours.
         Err(e) if e.kind() == io::ErrorKind::BrokenPipe => Ok(()),
         result => result.context("failed to write to stdout"),
+    }
+}
+
+/// Reads at most enough of `reader` to tell whether it exceeds [`termqr::MAX_DATA_LEN`],
+/// so `yes | termqr` or `termqr /dev/zero` fails fast instead of exhausting memory.
+fn read_limited(reader: impl Read) -> io::Result<Vec<u8>> {
+    // Room for a trailing "\r\n" that gets trimmed, plus one byte to detect overflow.
+    let limit = termqr::MAX_DATA_LEN + 3;
+    let mut buf = Vec::new();
+    reader
+        .take(u64::try_from(limit).expect("limit fits in u64"))
+        .read_to_end(&mut buf)?;
+    Ok(buf)
+}
+
+/// Renders `data`, turning a too-long error into one that names the limit and the highest
+/// lower level that would fit, if any.
+fn render(
+    data: &[u8],
+    polarity: termqr::Polarity,
+    level: termqr::ErrorCorrection,
+) -> anyhow::Result<String> {
+    match termqr::render(data, polarity, level) {
+        Err(termqr::Error::TooLong { len, level }) => {
+            let lower = termqr::ErrorCorrection::ALL
+                .into_iter()
+                .take_while(|&l| l != level)
+                .collect::<Vec<_>>();
+            let hint = match lower
+                .into_iter()
+                .rev()
+                .find(|&l| termqr::render(data, polarity, l).is_ok())
+            {
+                Some(l) => format!("it fits at --ec-level {l}"),
+                None => "shorten the input".to_owned(),
+            };
+            anyhow::bail!(
+                "input is {len} bytes, too long for error-correction level {level} \
+                 (at most {} bytes of arbitrary data); {hint}",
+                level.max_bytes()
+            )
+        }
+        result => result.context("failed to render input"),
     }
 }
 

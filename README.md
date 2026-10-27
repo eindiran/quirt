@@ -17,7 +17,8 @@ println!("{text}");
 background, so use `LightOnDark` on dark-themed terminals and `DarkOnLight` on light ones.
 
 `ErrorCorrection` trades capacity for damage tolerance. The smallest QR version that
-holds the input at that level is used.
+holds the input at that level is used; input that fits no version returns
+`Error::TooLong { len, level }`. `ErrorCorrection::max_bytes()` gives the limits below.
 
 | Level | Recoverable | Max bytes (version 40) |
 | --- | --- | --- |
@@ -46,16 +47,18 @@ echo "https://example.com" | termqr
 | `--ec-level L\|M\|Q\|H` | Error-correction level, case-insensitive; default `M` |
 | `--keep-newline` | Encode the trailing `\n`/`\r\n`; stripped by default |
 
-Input is encoded as raw bytes.
+Input is encoded as raw bytes. The CLI exits 1 with a message on stderr when:
 
-When stdout is a terminal, the CLI exits with an error if the code is wider than the
-terminal, since a wrapped code cannot be scanned:
+| Condition | Message |
+| --- | --- |
+| Input is empty after newline trimming | `input is empty; nothing to encode` |
+| Input exceeds 7089 bytes (`termqr::MAX_DATA_LEN`, digits at level L) | `input is longer than 7089 bytes, more than any qr code holds` |
+| Input does not fit at the chosen level | `input is 2332 bytes, too long for error-correction level M (at most 2331 bytes of arbitrary data); it fits at --ec-level L` |
+| stdout is a terminal narrower than the code | `qr code is 185 columns wide but the terminal is 120; widen the terminal or shorten the input` |
 
-```text
-Error: qr code is 185 columns wide but the terminal is 120; widen the terminal or shorten the input
-```
-
-Piped or redirected output is not checked.
+Input is read only up to `MAX_DATA_LEN` plus a trailing `\r\n` and one byte, so endless
+input such as `yes | termqr` fails immediately. The width check looks only at stdout, so
+`termqr > out.txt` from a terminal is not checked.
 
 ## Development
 

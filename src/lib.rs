@@ -17,16 +17,31 @@
 //! # Ok::<(), termqr::Error>(())
 //! ```
 
+use std::fmt;
+
 use qrcode::render::unicode::Dense1x2;
+use qrcode::types::QrError;
 use qrcode::{EcLevel, QrCode};
+
+/// Longest input, in bytes, that any QR code can hold: 7089 digits at version 40, level L.
+/// Longer input always fails, so readers can stop after `MAX_DATA_LEN + 1` bytes.
+pub const MAX_DATA_LEN: usize = 7089;
 
 /// Errors returned while building a QR code.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
-    /// The input could not be encoded, usually because it exceeds QR capacity.
+    /// `len` bytes do not fit in the largest QR version at `level`.
+    #[error("{len} bytes do not fit in a qr code at error-correction level {level}")]
+    TooLong {
+        /// Input length in bytes.
+        len: usize,
+        /// Level the encode was attempted at.
+        level: ErrorCorrection,
+    },
+    /// The encoder rejected the input for a reason other than its length.
     #[error("failed to encode data as a qr code")]
-    Encode(#[from] qrcode::types::QrError),
+    Encode(#[source] QrError),
 }
 
 /// Which modules are drawn with filled glyphs.
@@ -61,6 +76,35 @@ pub enum ErrorCorrection {
     High,
 }
 
+impl ErrorCorrection {
+    /// All levels, from least to most error correction.
+    pub const ALL: [Self; 4] = [Self::Low, Self::Medium, Self::Quartile, Self::High];
+
+    /// Most bytes of arbitrary data a version-40 code holds at this level. Input made only
+    /// of digits or uppercase alphanumerics packs denser and can be longer.
+    #[must_use]
+    pub const fn max_bytes(self) -> usize {
+        match self {
+            Self::Low => 2953,
+            Self::Medium => 2331,
+            Self::Quartile => 1663,
+            Self::High => 1273,
+        }
+    }
+}
+
+/// Formats as the standard single letter: `L`, `M`, `Q`, or `H`.
+impl fmt::Display for ErrorCorrection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Low => "L",
+            Self::Medium => "M",
+            Self::Quartile => "Q",
+            Self::High => "H",
+        })
+    }
+}
+
 impl From<ErrorCorrection> for EcLevel {
     fn from(level: ErrorCorrection) -> Self {
         match level {
@@ -80,14 +124,24 @@ impl From<ErrorCorrection> for EcLevel {
 ///
 /// # Errors
 ///
-/// Returns [`Error::Encode`] if `data` does not fit in any QR version at
-/// `error_correction`.
+/// Returns [`Error::TooLong`] if `data` does not fit in any QR version at
+/// `error_correction`, and [`Error::Encode`] for any other encoder failure.
 pub fn render(
     data: impl AsRef<[u8]>,
     polarity: Polarity,
     error_correction: ErrorCorrection,
 ) -> Result<String, Error> {
-    let code = QrCode::with_error_correction_level(data, error_correction.into())?;
+    let data = data.as_ref();
+    let code =
+        QrCode::with_error_correction_level(data, error_correction.into()).map_err(
+            |e| match e {
+                QrError::DataTooLong => Error::TooLong {
+                    len: data.len(),
+                    level: error_correction,
+                },
+                other => Error::Encode(other),
+            },
+        )?;
     let (dark, light) = match polarity {
         Polarity::LightOnDark => (Dense1x2::Light, Dense1x2::Dark),
         Polarity::DarkOnLight => (Dense1x2::Dark, Dense1x2::Light),
@@ -129,19 +183,36 @@ mod tests {
 
     #[test]
     fn capacity_per_level() {
-        // Version 40 byte-mode capacities from ISO/IEC 18004 table 7.
-        for (level, max_bytes) in [
-            (ErrorCorrection::Low, 2953),
-            (ErrorCorrection::Medium, 2331),
-            (ErrorCorrection::Quartile, 1663),
-            (ErrorCorrection::High, 1273),
-        ] {
-            assert!(render(vec![0u8; max_bytes], Polarity::default(), level).is_ok());
-            assert!(matches!(
-                render(vec![0u8; max_bytes + 1], Polarity::default(), level),
-                Err(Error::Encode(_))
-            ));
+        // 0x00 bytes force byte mode, so `max_bytes` is the exact limit.
+        for level in ErrorCorrection::ALL {
+            let max = level.max_bytes();
+            assert!(render(vec![0u8; max], Polarity::default(), level).is_ok());
+            let err = render(vec![0u8; max + 1], Polarity::default(), level).unwrap_err();
+            assert!(
+                matches!(err, Error::TooLong { len, level: l } if len == max + 1 && l == level)
+            );
         }
+    }
+
+    #[test]
+    fn too_long_message() {
+        let err = render(
+            vec![0u8; 2332],
+            Polarity::default(),
+            ErrorCorrection::Medium,
+        );
+        assert_eq!(
+            err.unwrap_err().to_string(),
+            "2332 bytes do not fit in a qr code at error-correction level M"
+        );
+    }
+
+    #[test]
+    fn max_data_len_is_digits_at_low() {
+        let digits = vec![b'7'; MAX_DATA_LEN];
+        assert!(render(&digits, Polarity::default(), ErrorCorrection::Low).is_ok());
+        let digits = vec![b'7'; MAX_DATA_LEN + 1];
+        assert!(render(&digits, Polarity::default(), ErrorCorrection::Low).is_err());
     }
 
     #[test]

@@ -221,6 +221,7 @@ dependencies = [
  "anyhow",
  "clap",
  "qrcode",
+ "rustix",
  "terminal_size",
  "thiserror",
 ]
