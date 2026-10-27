@@ -128,6 +128,15 @@ fn invert_is_ignored_with_colors() {
 }
 
 #[test]
+fn margin_flag_matches_library() {
+    let out = run(&["--margin", "1", "hello"], b"");
+    assert!(out.status.success());
+    let code = Renderer::new().margin(1).render("hello").unwrap();
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("{code}\n"));
+    assert!(!run(&["--margin", "256", "hello"], b"").status.success());
+}
+
+#[test]
 fn polarity_flag_is_gone() {
     let out = run(&["--polarity", "1", "hello"], b"");
     assert!(!out.status.success());

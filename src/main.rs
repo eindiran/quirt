@@ -36,6 +36,10 @@ struct Args {
     #[arg(long, value_enum, default_value_t = ColorWhen::Auto)]
     color: ColorWhen,
 
+    /// Quiet zone in modules on each side. The spec requires 4; most scanners read 1-2.
+    #[arg(long, value_name = "N", default_value_t = termqr::DEFAULT_MARGIN)]
+    margin: u8,
+
     /// Print even if the code is too wide or tall for the terminal.
     #[arg(long)]
     force: bool,
@@ -126,7 +130,8 @@ fn main() -> anyhow::Result<()> {
         } else {
             termqr::Polarity::LightOnDark
         })
-        .colors(colors);
+        .colors(colors)
+        .margin(args.margin);
     let code = render(&data, renderer)?;
     // Only stdout matters: `terminal_size()` would fall back to stderr or stdin and apply
     // the check to output redirected to a file.

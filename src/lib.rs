@@ -120,8 +120,8 @@ pub enum Colors {
     Ansi,
 }
 
-/// Modules of light border the QR spec requires around the code.
-const QUIET_ZONE: usize = 4;
+/// Modules of light border (quiet zone) the QR spec requires around the code.
+pub const DEFAULT_MARGIN: u8 = 4;
 
 /// Renders QR codes as Unicode half-block text. Each line holds two module rows, which
 /// keeps modules square in the usual 1:2 character cell.
@@ -136,18 +136,39 @@ const QUIET_ZONE: usize = 4;
 /// println!("{code}");
 /// # Ok::<(), termqr::Error>(())
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Renderer {
     error_correction: ErrorCorrection,
     polarity: Polarity,
     colors: Colors,
+    margin: u8,
+}
+
+impl Default for Renderer {
+    fn default() -> Self {
+        Self {
+            error_correction: ErrorCorrection::default(),
+            polarity: Polarity::default(),
+            colors: Colors::default(),
+            margin: DEFAULT_MARGIN,
+        }
+    }
 }
 
 impl Renderer {
-    /// A renderer with level M, [`Polarity::LightOnDark`], and [`Colors::Plain`].
+    /// A renderer with level M, [`Polarity::LightOnDark`], [`Colors::Plain`], and a
+    /// [`DEFAULT_MARGIN`]-module quiet zone.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Sets the quiet zone, in modules on each side. The spec requires 4; most scanners
+    /// read 1 or 2, which saves space in small terminals.
+    #[must_use]
+    pub fn margin(mut self, modules: u8) -> Self {
+        self.margin = modules;
+        self
     }
 
     /// Sets the error-correction level.
@@ -172,7 +193,7 @@ impl Renderer {
     }
 
     /// Encodes `data` in the smallest QR version that holds it and renders it, including
-    /// the 4-module quiet zone. Lines are joined with `\n`, with no trailing newline.
+    /// the quiet zone. Lines are joined with `\n`, with no trailing newline.
     ///
     /// # Errors
     ///
@@ -191,7 +212,8 @@ impl Renderer {
 
         let modules = code.width();
         let dark = code.to_colors();
-        let size = modules + 2 * QUIET_ZONE;
+        let margin = usize::from(self.margin);
+        let size = modules + 2 * margin;
         // Whether the module at (x, y) of the bordered grid gets a filled glyph. Rows past
         // the bottom (the odd half of the last line) are never filled, so they show the
         // background.
@@ -199,11 +221,11 @@ impl Renderer {
             if y >= size {
                 return false;
             }
-            let is_dark = x >= QUIET_ZONE
-                && y >= QUIET_ZONE
-                && x < QUIET_ZONE + modules
-                && y < QUIET_ZONE + modules
-                && dark[(y - QUIET_ZONE) * modules + (x - QUIET_ZONE)] == Color::Dark;
+            let is_dark = x >= margin
+                && y >= margin
+                && x < margin + modules
+                && y < margin + modules
+                && dark[(y - margin) * modules + (x - margin)] == Color::Dark;
             match (self.colors, self.polarity) {
                 (Colors::Ansi, _) | (Colors::Plain, Polarity::DarkOnLight) => is_dark,
                 (Colors::Plain, Polarity::LightOnDark) => !is_dark,
@@ -320,6 +342,24 @@ mod tests {
         assert_eq!(code.lines(), 15);
         assert!(code.as_str().lines().all(|l| l.chars().count() == 29));
         assert_eq!(code.as_str().lines().count(), 15);
+    }
+
+    #[test]
+    fn margin_sets_quiet_zone() {
+        // Version 1 is 21 modules; lines are ceil(size / 2).
+        for (margin, columns, lines) in [(0, 21, 11), (1, 23, 12), (2, 25, 13), (4, 29, 15)] {
+            let code = Renderer::new().margin(margin).render("hello").unwrap();
+            assert_eq!((code.columns(), code.lines()), (columns, lines));
+        }
+        // With LightOnDark the quiet zone is filled, so margin 1 gives a filled first row.
+        let code = Renderer::new().margin(1).render("hello").unwrap();
+        assert!(
+            code.as_str()
+                .lines()
+                .next()
+                .unwrap()
+                .starts_with('\u{2588}')
+        );
     }
 
     #[test]

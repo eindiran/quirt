@@ -23,6 +23,7 @@ println!("{code}");
 | `colors` | `Plain`: terminal's own colors. `Ansi`: SGR `30;107` forces black on bright white | `Plain` |
 | `polarity` | `LightOnDark`: light modules filled. `DarkOnLight`: dark modules filled. Only used with `Plain` | `LightOnDark` |
 | `error_correction` | See below | `Medium` |
+| `margin` | Quiet zone in modules per side (`u8`). The spec requires 4; most scanners read 1-2 | `DEFAULT_MARGIN` (4) |
 
 Scanners need dark modules on a light background. With `Plain`, pick the `Polarity`
 matching the terminal theme; `Ansi` works on any theme.
@@ -64,6 +65,7 @@ Input comes from `TEXT` if given, else `--file`, else stdin.
 | `--invert` | Without colors, fill dark modules instead of light ones; for light-background terminals |
 | `--color auto\|always\|never` | Force black-on-white with ANSI colors. `auto` (default) colors only a terminal stdout, and not when `NO_COLOR` is set |
 | `--ec-level L\|M\|Q\|H` | Error-correction level, case-insensitive; default `M` |
+| `--margin N` | Quiet zone in modules per side, 0-255; default 4 |
 | `--force` | Print even if the code is too wide or tall for the terminal |
 | `--keep-newline` | Keep a trailing `\n`/`\r\n` from a file or stdin; stripped by default |
 
