@@ -99,6 +99,42 @@ fn dash_as_text_is_literal() {
 }
 
 #[test]
+fn text_words_are_joined_with_spaces() {
+    let out = run(&["hello", "big", "world"], b"");
+    assert!(out.status.success());
+    assert_eq!(
+        String::from_utf8(out.stdout).unwrap(),
+        expected(
+            "hello big world",
+            Polarity::LightOnDark,
+            ErrorCorrection::Medium
+        )
+    );
+}
+
+#[test]
+fn keep_newline_with_text_is_an_error() {
+    let out = run(&["--keep-newline", "hello"], b"");
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8(out.stderr)
+            .unwrap()
+            .contains("cannot be used with")
+    );
+}
+
+#[test]
+fn negative_margin_gets_a_range_error() {
+    let out = run(&["--margin", "-1", "hello"], b"");
+    assert!(!out.status.success());
+    assert!(
+        String::from_utf8(out.stderr)
+            .unwrap()
+            .contains("-1 is not in 1..=32")
+    );
+}
+
+#[test]
 fn text_and_file_conflict() {
     let out = run(&["hello", "-f", "/etc/hosts"], b"");
     assert!(!out.status.success());
@@ -389,10 +425,22 @@ mod pty {
         Ok((controller, terminal))
     }
 
+    /// A termqr command with the terminal-facing environment fixed: a UTF-8 locale, a color
+    /// `TERM`, and no `NO_COLOR`, so results do not depend on the caller's environment.
+    fn termqr() -> Command {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_termqr"));
+        cmd.env("LANG", "en_US.UTF-8")
+            .env("TERM", "xterm-256color")
+            .env_remove("LC_ALL")
+            .env_remove("LC_CTYPE")
+            .env_remove("NO_COLOR");
+        cmd
+    }
+
     /// Runs termqr on `len` zero bytes. 600 bytes need version 19 (101 columns, 51 lines);
     /// 300 need version 13 (77 columns, 39 lines).
     fn run_zeros(len: usize, stdout: Stdio, stderr: Stdio) -> io::Result<Output> {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_termqr"))
+        let mut child = termqr()
             .stdin(Stdio::piped())
             .stdout(stdout)
             .stderr(stderr)
@@ -418,12 +466,11 @@ mod pty {
         });
         let mut child = {
             // Scoped so the Command, holding a copy of the terminal, drops after spawning.
-            let mut cmd = Command::new(env!("CARGO_BIN_EXE_termqr"));
+            let mut cmd = termqr();
             cmd.args(args)
                 .stdin(Stdio::null())
                 .stdout(terminal)
                 .stderr(Stdio::null());
-            cmd.env_remove("NO_COLOR");
             for (k, v) in env {
                 cmd.env(k, v);
             }
@@ -452,6 +499,54 @@ mod pty {
             .to_string()
             .replace('\n', "\r\n");
         assert_eq!(String::from_utf8(out).unwrap(), format!("{expected}\r\n"));
+    }
+
+    #[test]
+    fn color_auto_is_off_for_dumb_term() {
+        let (ok, out) = run_on_terminal(&["hello"], &[("TERM", "dumb")]).unwrap();
+        assert!(ok);
+        assert!(!out.contains(&0x1b));
+    }
+
+    #[test]
+    fn non_utf8_locale_picks_ascii() {
+        // --margin 1 keeps the ASCII code (46x23) inside the 80x24 terminal.
+        for (lang, ascii) in [
+            ("C", true),
+            ("en_US.ISO8859-1", true),
+            ("en_US.UTF-8", false),
+        ] {
+            let (ok, out) =
+                run_on_terminal(&["--margin", "1", "hello"], &[("LANG", lang)]).unwrap();
+            assert!(ok);
+            assert_eq!(out.is_ascii(), ascii, "LANG={lang}");
+        }
+        // LC_ALL wins over LANG, and --unicode overrides the choice.
+        let (_, out) = run_on_terminal(&["--margin", "1", "hello"], &[("LC_ALL", "C")]).unwrap();
+        assert!(out.is_ascii());
+        let (_, out) =
+            run_on_terminal(&["--unicode", "--margin", "1", "hello"], &[("LANG", "C")]).unwrap();
+        assert!(!out.is_ascii());
+    }
+
+    #[test]
+    fn size_error_suggests_flags_that_fit() {
+        // --scale 2 makes "hello" 58 columns. In 40 columns --margin 1 (46) and
+        // --ec-level L (still version 1) are not enough; --scale 1 (29 by 15) fits.
+        let (_controller, terminal) = open_terminal(40).unwrap();
+        let out = termqr()
+            .args(["--scale", "2", "hello"])
+            .stdout(terminal)
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
+        assert!(!out.status.success());
+        let stderr = String::from_utf8(out.stderr).unwrap();
+        assert!(
+            stderr.contains(
+                "qr code is 58 columns wide but the terminal is 40; --scale 1 makes it fit"
+            )
+        );
     }
 
     #[test]

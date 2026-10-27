@@ -74,18 +74,19 @@ termqr --man > /usr/local/share/man/man1/termqr.1
 
 | Argument | Effect |
 | --- | --- |
-| `[TEXT]` | Text to encode, verbatim; use `termqr -- -x` for text starting with `-` |
+| `[TEXT]...` | Text to encode, verbatim; several words are joined with spaces. Use `termqr -- -x` for text starting with `-` |
 | `-f, --file FILE` | File to encode; `-` reads stdin. Conflicts with `TEXT` |
 | `--invert` | Plain glyphs with dark modules filled, for light-background terminals. Turns off `--color auto`; no effect with `--color always` |
-| `--color auto\|always\|never` | Force black-on-white with ANSI colors. `auto` (default) colors only a terminal stdout, and not when `NO_COLOR` is set or `--invert` is given |
+| `--color auto\|always\|never` | Force black-on-white with ANSI colors. `auto` (default) colors only a terminal stdout, and not when `NO_COLOR` is set, `TERM=dumb`, or `--invert` is given |
 | `--ec-level L\|M\|Q\|H` | Error-correction level, case-insensitive; default `M` |
 | `--margin N` | Quiet zone in modules per side, 1-32; default 4. 0 is refused because the terminal background is not a reliable quiet zone |
 | `--scale N` | Draw each module N columns by N half-lines, 1-16; default 1 |
-| `--ascii` | ASCII only: `##` per module, twice as wide |
+| `--ascii` | ASCII only: `##` per module, twice as wide. Chosen automatically on a terminal whose locale (`LC_ALL`, `LC_CTYPE`, `LANG`) is not UTF-8 |
+| `--unicode` | Half blocks even when the locale is not UTF-8 |
 | `--force` | Print even if the code is too wide or tall for the terminal |
 | `--completions SHELL` | Print a completion script (`bash`, `zsh`, `fish`, `elvish`, `powershell`) and exit |
 | `--man` | Print the man page (roff) and exit |
-| `--keep-newline` | Keep a trailing `\n`/`\r\n` from a file or stdin; stripped by default |
+| `--keep-newline` | Keep a trailing `\n`/`\r\n` from a file or stdin; stripped by default. Conflicts with `TEXT` |
 
 Input is encoded as raw bytes. The CLI exits 1 with a message on stderr when:
 
@@ -97,6 +98,11 @@ Input is encoded as raw bytes. The CLI exits 1 with a message on stderr when:
 | stdout is a terminal narrower than the code | `qr code is 185 columns wide but the terminal is 120; widen the terminal, shorten the input, or pass --force` |
 | stdout is a terminal with fewer than `lines + 1` rows (one is kept for the prompt) | `qr code is 39 lines tall but the terminal shows 23 above the prompt; enlarge the terminal, shorten the input, or pass --force` |
 
+When a size check fails, the message names the fewest of `--margin 1`, `--ec-level L`, and
+`--scale 1` that would make the code fit, for example `qr code is 58 columns wide but the
+terminal is 40; --scale 1 makes it fit, or pass --force`. Only changes from the current
+settings are suggested.
+
 Input is read only up to `MAX_DATA_LEN` plus a trailing `\r\n` and one byte, so endless
 input such as `yes | termqr` fails immediately. The size checks look only at stdout, so
 `termqr > out.txt` from a terminal is not checked.
@@ -107,7 +113,7 @@ input such as `yes | termqr` fails immediately. The size checks look only at std
 | --- | --- | --- |
 | Code is stretched to about twice its width | The terminal draws East Asian Ambiguous characters (`█▀▄`) two columns wide, as with iTerm2's "Treat ambiguous-width characters as double width" or VTE's `ambiguous-width = wide`. Terminals do not report this, so the width check also undercounts | `--ascii` |
 | Thin lines between rows | Line spacing above 1.0 separates the half blocks | Set line spacing to 1.0, or `--ascii --color always` (colored spaces) |
-| Garbled characters | Terminal or locale is not UTF-8 | `--ascii` |
+| Garbled characters | The locale says UTF-8 but the terminal is not | `--ascii` |
 | Scans fail on a light theme with `--color never` | Light modules are filled by default | `--invert`, or drop `--color never` |
 
 ## Development

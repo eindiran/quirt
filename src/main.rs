@@ -19,9 +19,10 @@ use clap::{CommandFactory, Parser, ValueEnum};
     reason = "each bool is an independent command-line switch"
 )]
 struct Args {
-    /// Text to encode, as given (no newline trimming).
+    /// Text to encode, as given (no newline trimming). Several words are joined with
+    /// single spaces, as `echo` does.
     #[arg(conflicts_with = "file")]
-    text: Option<OsString>,
+    text: Vec<OsString>,
 
     /// File to encode instead of TEXT; `-` reads stdin.
     #[arg(short, long, value_name = "FILE")]
@@ -37,33 +38,40 @@ struct Args {
     ec_level: EcLevel,
 
     /// When to force black-on-white with ANSI colors. `auto` colors only a terminal
-    /// stdout, and not when `NO_COLOR` is set or `--invert` is given.
+    /// stdout, and not when `NO_COLOR` is set, `TERM` is `dumb`, or `--invert` is given.
     #[arg(long, value_enum, default_value_t = ColorWhen::Auto)]
     color: ColorWhen,
 
     /// Quiet zone in modules on each side, 1-32. The spec requires 4; most scanners read
     /// 1-2. 0 is refused: the terminal background cannot stand in for it.
     #[arg(long, value_name = "N", default_value_t = termqr::DEFAULT_MARGIN,
+          allow_negative_numbers = true,
           value_parser = clap::value_parser!(u8).range(1..=i64::from(MAX_MARGIN)))]
     margin: u8,
 
     /// Draw each module N columns wide and N half-lines tall, 1-16, to scan from farther
     /// away.
     #[arg(long, value_name = "N", default_value_t = 1,
+          allow_negative_numbers = true,
           value_parser = clap::value_parser!(u8).range(1..=i64::from(MAX_SCALE)))]
     scale: u8,
 
-    /// Draw with ASCII only (`##` per module, twice as wide). For non-UTF-8 terminals and
-    /// terminals that draw block characters two columns wide.
+    /// Draw with ASCII only (`##` per module, twice as wide). For terminals that draw
+    /// block characters two columns wide. Chosen automatically on a terminal whose locale
+    /// is not UTF-8.
     #[arg(long)]
     ascii: bool,
+
+    /// Draw with Unicode half blocks even when the locale is not UTF-8.
+    #[arg(long, conflicts_with = "ascii")]
+    unicode: bool,
 
     /// Print even if the code is too wide or tall for the terminal.
     #[arg(long)]
     force: bool,
 
     /// Encode a trailing newline from a file or stdin instead of stripping it.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "text")]
     keep_newline: bool,
 
     /// Print a completion script for SHELL and exit.
@@ -132,17 +140,22 @@ fn main() -> anyhow::Result<()> {
         return write_stdout(&page);
     }
 
-    let data = match (args.text, &args.file) {
-        // The argument is taken verbatim: a newline in it was put there on purpose.
-        (Some(text), _) => text.into_encoded_bytes(),
-        (None, Some(path)) if path.as_os_str() != "-" => {
+    let data = match (args.text.is_empty(), &args.file) {
+        // Arguments are taken verbatim: a newline in them was put there on purpose.
+        (false, _) => args
+            .text
+            .into_iter()
+            .map(OsString::into_encoded_bytes)
+            .collect::<Vec<_>>()
+            .join(&b' '),
+        (true, Some(path)) if path.as_os_str() != "-" => {
             let file = fs::File::open(path)
                 .with_context(|| format!("failed to read {}", path.display()))?;
             let data =
                 read_limited(file).with_context(|| format!("failed to read {}", path.display()))?;
             trimmed(data, args.keep_newline)
         }
-        (None, _) => trimmed(
+        (true, _) => trimmed(
             read_limited(io::stdin()).context("failed to read stdin")?,
             args.keep_newline,
         ),
@@ -157,11 +170,12 @@ fn main() -> anyhow::Result<()> {
         );
     }
 
+    let on_terminal = io::stdout().is_terminal();
     let ansi = match args.color {
         ColorWhen::Always => true,
         ColorWhen::Never => false,
         // --invert only means something for plain glyphs, so asking for it opts out.
-        ColorWhen::Auto => !args.invert && io::stdout().is_terminal() && !no_color(),
+        ColorWhen::Auto => !args.invert && on_terminal && !no_color() && !term_is_dumb(),
     };
     let colors = if ansi {
         termqr::Colors::Ansi
@@ -178,11 +192,13 @@ fn main() -> anyhow::Result<()> {
         .colors(colors)
         .margin(args.margin)
         .scale(NonZeroU8::new(args.scale).expect("clap enforces scale >= 1"))
-        .glyphs(if args.ascii {
-            termqr::Glyphs::Ascii
-        } else {
-            termqr::Glyphs::HalfBlock
-        });
+        .glyphs(
+            if args.ascii || (!args.unicode && on_terminal && !locale_is_utf8()) {
+                termqr::Glyphs::Ascii
+            } else {
+                termqr::Glyphs::HalfBlock
+            },
+        );
     let code = render(&data, renderer)?;
     // Only stdout matters: `terminal_size()` would fall back to stderr or stdin and apply
     // the check to output redirected to a file.
@@ -190,7 +206,17 @@ fn main() -> anyhow::Result<()> {
     if let (false, Some((terminal_size::Width(cols), terminal_size::Height(rows)))) =
         (args.force, size)
     {
-        check_fits(&code, cols, rows)?;
+        let mut shrinks = Vec::new();
+        if args.margin > 1 {
+            shrinks.push(Shrink::Margin);
+        }
+        if !matches!(args.ec_level, EcLevel::L) {
+            shrinks.push(Shrink::EcLevel);
+        }
+        if args.scale > 1 {
+            shrinks.push(Shrink::Scale);
+        }
+        check_fits(&data, renderer, &code, &shrinks, cols, rows)?;
     }
     // Streams line by line; a code at the size limits is tens of MB of text.
     let mut out = io::BufWriter::new(io::stdout().lock());
@@ -254,30 +280,111 @@ fn no_color() -> bool {
     std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty())
 }
 
-/// Fails if `code` is wider than `terminal_cols` or taller than the `terminal_rows - 1`
-/// lines left above the next prompt. A wrapped code, or one whose top scrolled away,
-/// cannot be scanned.
-fn check_fits(
-    code: &termqr::Rendered,
-    terminal_cols: u16,
-    terminal_rows: u16,
-) -> anyhow::Result<()> {
+/// Whether `TERM` is `dumb`, which by convention asks for no escape sequences.
+fn term_is_dumb() -> bool {
+    std::env::var_os("TERM").is_some_and(|t| t == "dumb")
+}
+
+/// Whether the character-type locale is UTF-8. It is the first non-empty one of `LC_ALL`,
+/// `LC_CTYPE`, and `LANG`; with none set it is POSIX `C`, which is not.
+fn locale_is_utf8() -> bool {
+    ["LC_ALL", "LC_CTYPE", "LANG"]
+        .into_iter()
+        .filter_map(std::env::var_os)
+        .find(|v| !v.is_empty())
+        .is_some_and(|v| {
+            let v = v.to_string_lossy().to_ascii_lowercase();
+            v.contains("utf-8") || v.contains("utf8")
+        })
+}
+
+/// A flag change the size error can suggest. Variants are only offered when the user's
+/// setting is not already the smallest.
+#[derive(Debug, Clone, Copy)]
+enum Shrink {
+    Margin,
+    EcLevel,
+    Scale,
+}
+
+impl Shrink {
+    fn flag(self) -> &'static str {
+        match self {
+            Self::Margin => "--margin 1",
+            Self::EcLevel => "--ec-level L",
+            Self::Scale => "--scale 1",
+        }
+    }
+
+    fn apply(self, renderer: termqr::Renderer) -> termqr::Renderer {
+        match self {
+            Self::Margin => renderer.margin(1),
+            Self::EcLevel => renderer.error_correction(termqr::ErrorCorrection::Low),
+            Self::Scale => renderer.scale(NonZeroU8::MIN),
+        }
+    }
+}
+
+/// Describes why `code` does not fit: wider than `cols`, or taller than the `rows - 1`
+/// lines above the next prompt. Returns the description and the generic remedy.
+fn size_problem(code: &termqr::Rendered, cols: u16, rows: u16) -> Option<(String, &'static str)> {
     let width = code.columns();
-    if width > usize::from(terminal_cols) {
-        anyhow::bail!(
-            "qr code is {width} columns wide but the terminal is {terminal_cols}; \
-             widen the terminal, shorten the input, or pass --force"
-        );
+    if width > usize::from(cols) {
+        return Some((
+            format!("qr code is {width} columns wide but the terminal is {cols}"),
+            "widen the terminal",
+        ));
     }
     let height = code.lines();
-    let visible = usize::from(terminal_rows).saturating_sub(1);
+    let visible = usize::from(rows).saturating_sub(1);
     if height > visible {
-        anyhow::bail!(
-            "qr code is {height} lines tall but the terminal shows {visible} above the \
-             prompt; enlarge the terminal, shorten the input, or pass --force"
-        );
+        return Some((
+            format!(
+                "qr code is {height} lines tall but the terminal shows {visible} above the prompt"
+            ),
+            "enlarge the terminal",
+        ));
     }
-    Ok(())
+    None
+}
+
+/// Fails if `code` does not fit the terminal: a wrapped code, or one whose top scrolled
+/// away, cannot be scanned. The error names the fewest `shrinks` that make it fit, if any.
+fn check_fits(
+    data: &[u8],
+    renderer: termqr::Renderer,
+    code: &termqr::Rendered,
+    shrinks: &[Shrink],
+    cols: u16,
+    rows: u16,
+) -> anyhow::Result<()> {
+    let Some((problem, remedy)) = size_problem(code, cols, rows) else {
+        return Ok(());
+    };
+    // At most 3 shrinks, so trying every subset, smallest first, is at most 7 renders.
+    let mut subsets: Vec<u32> = (1..1u32 << shrinks.len()).collect();
+    subsets.sort_by_key(|m| m.count_ones());
+    let fix = subsets.into_iter().find_map(|mask| {
+        let chosen: Vec<Shrink> = (0..shrinks.len())
+            .filter(|i| mask & (1 << i) != 0)
+            .map(|i| shrinks[i])
+            .collect();
+        let shrunk = chosen.iter().fold(renderer, |r, s| s.apply(r));
+        let fits = shrunk
+            .render(data)
+            .is_ok_and(|c| size_problem(&c, cols, rows).is_none());
+        fits.then(|| {
+            chosen
+                .iter()
+                .map(|s| s.flag())
+                .collect::<Vec<_>>()
+                .join(" ")
+        })
+    });
+    match fix {
+        Some(flags) => anyhow::bail!("{problem}; {flags} makes it fit, or pass --force"),
+        None => anyhow::bail!("{problem}; {remedy}, shorten the input, or pass --force"),
+    }
 }
 
 /// Applies [`trim_trailing_newline`] unless `keep_newline` is set.
@@ -319,17 +426,28 @@ mod tests {
         }
     }
 
+    const URL: &[u8] = b"https://example.com";
+
+    /// Runs `check_fits` for `URL` and returns the error message, if any.
+    fn fit_error(
+        renderer: termqr::Renderer,
+        shrinks: &[Shrink],
+        cols: u16,
+        rows: u16,
+    ) -> Option<String> {
+        let code = renderer.render(URL).unwrap();
+        check_fits(URL, renderer, &code, shrinks, cols, rows)
+            .err()
+            .map(|e| e.to_string())
+    }
+
     #[test]
     fn width_check_boundary() {
-        // Version 2 plus quiet zone: 33 columns.
-        let code = termqr::Renderer::new()
-            .colors(termqr::Colors::Ansi)
-            .render("https://example.com")
-            .unwrap();
-        assert!(check_fits(&code, 33, 100).is_ok());
-        let err = check_fits(&code, 32, 100).unwrap_err().to_string();
+        // Version 2 plus quiet zone: 33 columns. ANSI escapes do not count.
+        let r = termqr::Renderer::new().colors(termqr::Colors::Ansi);
+        assert_eq!(fit_error(r, &[], 33, 100), None);
         assert_eq!(
-            err,
+            fit_error(r, &[], 32, 100).unwrap(),
             "qr code is 33 columns wide but the terminal is 32; \
              widen the terminal, shorten the input, or pass --force"
         );
@@ -338,15 +456,43 @@ mod tests {
     #[test]
     fn height_check_leaves_a_line_for_the_prompt() {
         // Version 2 plus quiet zone: 33 modules, so 17 lines.
-        let code = termqr::Renderer::new()
-            .render("https://example.com")
-            .unwrap();
-        assert!(check_fits(&code, 100, 18).is_ok());
-        let err = check_fits(&code, 100, 17).unwrap_err().to_string();
+        let r = termqr::Renderer::new();
+        assert_eq!(fit_error(r, &[], 100, 18), None);
         assert_eq!(
-            err,
+            fit_error(r, &[], 100, 17).unwrap(),
             "qr code is 17 lines tall but the terminal shows 16 above the prompt; \
              enlarge the terminal, shorten the input, or pass --force"
+        );
+    }
+
+    #[test]
+    fn size_error_names_the_fewest_flags_that_fit() {
+        let all = [Shrink::Margin, Shrink::EcLevel, Shrink::Scale];
+        // 33 columns; --margin 1 makes 27.
+        assert_eq!(
+            fit_error(termqr::Renderer::new(), &all, 30, 100).unwrap(),
+            "qr code is 33 columns wide but the terminal is 30; \
+             --margin 1 makes it fit, or pass --force"
+        );
+        // Scale 2 is 66 columns. --margin 1 gives 54 and --ec-level L keeps version 2,
+        // so only --scale 1 (33) fits in 40.
+        let scaled = termqr::Renderer::new().scale(NonZeroU8::new(2).unwrap());
+        assert_eq!(
+            fit_error(scaled, &all, 40, 100).unwrap(),
+            "qr code is 66 columns wide but the terminal is 40; \
+             --scale 1 makes it fit, or pass --force"
+        );
+        // In 30 columns both --margin 1 and --scale 1 are needed (27).
+        assert!(
+            fit_error(scaled, &all, 30, 100)
+                .unwrap()
+                .ends_with("; --margin 1 --scale 1 makes it fit, or pass --force")
+        );
+        // Nothing fits in 10 columns.
+        assert!(
+            fit_error(scaled, &all, 10, 100)
+                .unwrap()
+                .ends_with("; widen the terminal, shorten the input, or pass --force")
         );
     }
 }
