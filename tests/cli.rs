@@ -1,7 +1,7 @@
 //! `quirt` binary tests, checked against the library's output.
 #![cfg(feature = "cli")]
 
-use std::io::Write;
+use std::io::{ErrorKind, Write};
 use std::num::NonZeroU8;
 use std::process::{Command, Output, Stdio};
 
@@ -19,12 +19,16 @@ fn run(args: &[&str], stdin: &[u8]) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .expect("cargo builds the quirt binary for integration tests");
-    child
+    // Text and --file input leave stdin unread, so the child can exit first.
+    match child
         .stdin
         .take()
         .expect("stdin was configured as piped")
         .write_all(stdin)
-        .expect("child reads all of stdin");
+    {
+        Err(e) if e.kind() == ErrorKind::BrokenPipe => {}
+        result => result.expect("writing to the child's stdin succeeds"),
+    }
     child
         .wait_with_output()
         .expect("child output can be collected")
