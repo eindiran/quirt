@@ -5,7 +5,8 @@ help:
 	@printf 'Usage: make <target>\n'
 	@printf '\n'
 	@printf '  help          Show this help\n'
-	@printf '  all           Build all targets\n'
+	@printf '  all           Run check, then build\n'
+	@printf '  build         Build all targets\n'
 	@printf '  test          Run the test suite\n'
 	@printf '  lint          Run clippy and cargo audit (read-only)\n'
 	@printf '  deny          Check licenses, bans, sources, advisories\n'
@@ -15,7 +16,10 @@ help:
 	@printf '  clean         Remove build artifacts\n'
 
 .PHONY: all
-all:
+all: check build
+
+.PHONY: build
+build:
 	cargo build --all-targets --all-features
 
 .PHONY: test
