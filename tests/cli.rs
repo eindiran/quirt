@@ -245,6 +245,25 @@ fn generators() {
     assert!(page.contains("\\-\\-margin"));
 }
 
+#[test]
+fn readme_help_is_current() {
+    let block = include_str!("../README.md")
+        .split_once("`quirt --help`:\n\n```text\n")
+        .and_then(|(_, rest)| rest.split_once("\n```"))
+        .map(|(block, _)| block)
+        .expect("README has a `quirt --help` text block");
+    // The README copy has trailing whitespace stripped.
+    let help: Vec<String> = stdout(&run(&["--help"], b""))
+        .lines()
+        .map(|l| l.trim_end().to_owned())
+        .collect();
+    assert_eq!(
+        block,
+        help.join("\n"),
+        "README help is stale: replace the block with `quirt --help` output"
+    );
+}
+
 /// Tests with stdout on a real pseudo-terminal.
 #[cfg(unix)]
 mod pty {

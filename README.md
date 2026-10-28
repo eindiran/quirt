@@ -44,10 +44,83 @@ pbpaste | quirt
 
 The binary needs the `cli` feature. From a clone, `cargo install --path . --features cli`.
 
-`quirt --help` lists the flags. See [CLI behavior](documentation/cli-behavior.md) for what
-it does not cover (input limits, newline trimming, color and glyph defaults, size checks,
-exit status) and [Troubleshooting](documentation/troubleshooting.md) for codes that do not
-display or scan.
+`quirt --help`:
+
+```text
+Print text as a QR code in the terminal.
+
+Encodes TEXT, else --file, else stdin.
+
+Usage: quirt [OPTIONS] [TEXT]...
+
+Arguments:
+  [TEXT]...
+          Text to encode verbatim; words are joined with spaces
+
+Options:
+  -f, --file <FILE>
+          File to encode; `-` is stdin
+
+      --invert
+          Plain glyphs with dark modules filled, for light backgrounds; turns off --color auto
+
+      --ec-level <EC_LEVEL>
+          Error-correction level
+
+          Possible values:
+          - L: About 7% recoverable; at most 2953 bytes
+          - M: About 15% recoverable; at most 2331 bytes
+          - Q: About 25% recoverable; at most 1663 bytes
+          - H: About 30% recoverable; at most 1273 bytes
+
+          [default: M]
+
+      --color <COLOR>
+          ANSI black on white; auto skips pipes, `NO_COLOR`, `TERM=dumb`, and --invert
+
+          [default: auto]
+          [possible values: auto, always, never]
+
+      --margin <N>
+          Quiet zone in modules, 1-32; most scanners read 1-2
+
+          [default: 4]
+
+      --scale <N>
+          Module size multiplier, 1-16
+
+          [default: 1]
+
+      --ascii
+          Draw with `##` (twice as wide); automatic on a terminal with a non-UTF-8 locale
+
+      --unicode
+          Draw with half blocks even if the locale is not UTF-8
+
+      --force
+          Print even if the code does not fit the terminal
+
+      --keep-newline
+          Keep the trailing newline of a file or stdin
+
+      --completions <SHELL>
+          Print a completion script and exit
+
+          [possible values: bash, elvish, fish, powershell, zsh]
+
+      --man
+          Print the man page and exit
+
+  -h, --help
+          Print help (see a summary with '-h')
+
+  -V, --version
+          Print version
+```
+
+See [CLI behavior](documentation/cli-behavior.md) for what `--help` does not cover (input
+limits, newline trimming, color and glyph defaults, size checks, exit status) and
+[Troubleshooting](documentation/troubleshooting.md) for codes that do not display or scan.
 
 ## Development
 
