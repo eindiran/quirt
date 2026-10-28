@@ -1,0 +1,58 @@
+---
+# Publishes to crates.io when a GitHub Release is published. Authenticates with
+# crates.io Trusted Publishing (https://crates.io/docs/trusted-publishing), so
+# the repo stores no token.
+name: Release
+
+on:  # yamllint disable-line rule:truthy
+  release:
+    types: [published]
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup toolchain install
+      - name: Check the version
+        id: version
+        run: |
+          version=$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[0].version')
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME does not match version $version"
+            exit 1
+          fi
+          # The sparse index file has one JSON line per published version. A
+          # version already there (such as the hand-published first one) is
+          # skipped instead of failing in cargo publish.
+          if curl -fsS https://index.crates.io/qu/ir/quirt \
+            | jq -e --arg v "$version" 'select(.vers == $v)' > /dev/null; then
+            echo "::notice::quirt $version is already on crates.io"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.version.outputs.publish == 'true'
+        run: cargo test --locked --all-features
+      - if: steps.version.outputs.publish == 'true'
+        uses: rust-lang/crates-io-auth-action@v1
+        id: auth
+      - if: steps.version.outputs.publish == 'true'
+        run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}

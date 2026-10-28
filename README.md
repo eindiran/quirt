@@ -1,13 +1,12 @@
 # quirt
 
-Renders QR codes as terminal text: a Rust library and the `quirt` CLI. Not yet on
-crates.io; depend on or install from git.
+Renders QR codes as terminal text: a Rust library and the `quirt` CLI.
 
 ## Library
 
 ```toml
 [dependencies]
-quirt = { git = "https://github.com/eindiran/quirt" }
+quirt = "1"
 ```
 
 ```rust
@@ -37,7 +36,7 @@ println!("{code}");
 ## CLI
 
 ```bash
-cargo install --git https://github.com/eindiran/quirt --features cli
+cargo install quirt --features cli
 quirt "https://example.com"
 pbpaste | quirt
 ```
@@ -127,12 +126,16 @@ limits, newline trimming, color and glyph defaults, size checks, exit status) an
 `make check` runs fmt, clippy, `cargo audit`, `cargo deny`, the tests, and pre-commit. It
 needs `pre-commit`, `cargo-audit`, `cargo-deny`, and `checkmake`; the toolchain is pinned in
 `rust-toolchain.toml`. The render and Unicode tests decode output with `rqrr`. `deny.toml`
-allows only the licenses already in the tree.
+allows only the licenses already in the tree. Publishing a GitHub Release publishes the
+crate to crates.io.
 
 ### Layout
 
 ```text
 .
+├── .github
+│   └── workflows
+│       └── release.yml        # publishes to crates.io on a GitHub Release
 ├── documentation
 │   ├── cli-behavior.md        # what --help does not cover
 │   └── troubleshooting.md
