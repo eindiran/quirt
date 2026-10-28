@@ -18,7 +18,7 @@ pub fn decode(output: &str) -> Vec<u8> {
 /// The drawn cells, `true` where a cell is filled: a block glyph or `##` in plain output,
 /// a black background in ASCII ANSI output. Half blocks give two cell rows per line;
 /// ASCII gives one cell per two columns.
-fn filled_cells(output: &str) -> Vec<Vec<bool>> {
+pub fn filled_cells(output: &str) -> Vec<Vec<bool>> {
     let half_block = output.contains(['\u{2588}', '\u{2580}', '\u{2584}']);
     let mut rows = Vec::new();
     for line in output.lines() {

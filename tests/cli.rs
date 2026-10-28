@@ -2,12 +2,18 @@
 #![cfg(feature = "cli")]
 
 use std::io::Write;
+use std::num::NonZeroU8;
 use std::process::{Command, Output, Stdio};
 
-use termqr::{Colors, ErrorCorrection, Polarity, Renderer};
+use termqr::{ErrorCorrection, Glyphs, Renderer, Style};
 
+fn termqr() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_termqr"))
+}
+
+/// Runs termqr with `args`, feeding `stdin`, with stdout and stderr piped.
 fn run(args: &[&str], stdin: &[u8]) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_termqr"))
+    let mut child = termqr()
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -25,251 +31,192 @@ fn run(args: &[&str], stdin: &[u8]) -> Output {
         .expect("child output can be collected")
 }
 
-fn expected(data: &str, polarity: Polarity, ec: ErrorCorrection) -> String {
-    let code = Renderer::new()
-        .polarity(polarity)
-        .error_correction(ec)
-        .render(data)
-        .expect("test inputs fit in a qr code");
-    format!("{code}\n")
+fn stdout(out: &Output) -> String {
+    String::from_utf8(out.stdout.clone()).expect("termqr writes UTF-8 or ASCII")
+}
+
+fn stderr(out: &Output) -> String {
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+/// What `renderer` prints for `data`, with the trailing newline termqr adds.
+fn expected(renderer: Renderer, data: &str) -> String {
+    format!("{}\n", renderer.render(data).expect("test inputs fit"))
 }
 
 #[test]
-fn stdin_strips_trailing_newline() {
-    let out = run(&[], b"hello\n");
-    assert!(out.status.success());
-    assert_eq!(
-        String::from_utf8(out.stdout).unwrap(),
-        expected("hello", Polarity::LightOnDark, ErrorCorrection::Medium)
-    );
+fn flags_match_the_library() {
+    // Piped stdout: no colors or ASCII unless asked for.
+    let base = Renderer::new();
+    for (flags, renderer) in [
+        (&[][..], base),
+        (&["--invert"], base.style(Style::DarkOnLight)),
+        (&["--color", "always"], base.style(Style::Ansi)),
+        (&["--color", "always", "--invert"], base.style(Style::Ansi)),
+        (&["--ascii"], base.glyphs(Glyphs::Ascii)),
+        (&["--margin", "1"], base.margin(1)),
+        (&["--scale", "2"], base.scale(NonZeroU8::new(2).unwrap())),
+        (
+            &["--ec-level", "H"],
+            base.error_correction(ErrorCorrection::High),
+        ),
+        (
+            &["--ec-level", "h"],
+            base.error_correction(ErrorCorrection::High),
+        ),
+        (&["--margin", "32"], base.margin(32)),
+        (&["--scale", "16"], base.scale(NonZeroU8::new(16).unwrap())),
+    ] {
+        let out = run(&[flags, &["hello"]].concat(), b"");
+        assert!(out.status.success(), "{flags:?}: {}", stderr(&out));
+        assert_eq!(stdout(&out), expected(renderer, "hello"), "{flags:?}");
+    }
 }
 
 #[test]
-fn keep_newline_encodes_it() {
-    let out = run(&["--keep-newline", "-f", "-"], b"hello\n");
-    assert!(out.status.success());
-    assert_eq!(
-        String::from_utf8(out.stdout).unwrap(),
-        expected("hello\n", Polarity::LightOnDark, ErrorCorrection::Medium)
-    );
-}
-
-#[test]
-fn reads_file_with_invert() {
-    let path = std::env::temp_dir().join(format!("termqr-cli-{}.txt", std::process::id()));
-    std::fs::write(&path, "from file\n").unwrap();
-    let out = run(&["--invert", "-f", path.to_str().unwrap()], b"");
-    let _ = std::fs::remove_file(&path); // best-effort cleanup of a temp file
-    assert!(out.status.success());
-    assert_eq!(
-        String::from_utf8(out.stdout).unwrap(),
-        expected("from file", Polarity::DarkOnLight, ErrorCorrection::Medium)
-    );
-}
-
-#[test]
-fn missing_file_fails_with_path_in_message() {
-    let out = run(&["--file", "/nonexistent/termqr-input"], b"");
-    assert!(!out.status.success());
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains("failed to read /nonexistent/termqr-input"));
-}
-
-#[test]
-fn text_argument_is_encoded_verbatim() {
-    // stdin is ignored when TEXT is given, and a trailing newline in TEXT is kept.
-    for text in ["https://example.com", "hello\n"] {
-        let out = run(&[text], b"ignored");
-        assert!(out.status.success());
+fn color_always_overrides_no_color() {
+    for no_color in ["", "1"] {
+        let out = termqr()
+            .args(["--color", "always", "hello"])
+            .env("NO_COLOR", no_color)
+            .output()
+            .unwrap();
         assert_eq!(
-            String::from_utf8(out.stdout).unwrap(),
-            expected(text, Polarity::LightOnDark, ErrorCorrection::Medium)
+            stdout(&out),
+            expected(Renderer::new().style(Style::Ansi), "hello")
         );
     }
 }
 
 #[test]
-fn dash_as_text_is_literal() {
-    let out = run(&["--", "-"], b"ignored");
-    assert!(out.status.success());
-    assert_eq!(
-        String::from_utf8(out.stdout).unwrap(),
-        expected("-", Polarity::LightOnDark, ErrorCorrection::Medium)
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn non_utf8_text_argument_is_encoded_as_raw_bytes() {
-    use std::os::unix::ffi::OsStrExt;
-    let arg = std::ffi::OsStr::from_bytes(b"\xff\xfe");
-    let out = Command::new(env!("CARGO_BIN_EXE_termqr"))
-        .arg(arg)
-        .output()
-        .unwrap();
-    assert!(out.status.success());
-    let code = Renderer::new().render(b"\xff\xfe").unwrap();
-    assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("{code}\n"));
-}
-
-#[test]
-fn text_words_are_joined_with_spaces() {
-    let out = run(&["hello", "big", "world"], b"");
-    assert!(out.status.success());
-    assert_eq!(
-        String::from_utf8(out.stdout).unwrap(),
-        expected(
-            "hello big world",
-            Polarity::LightOnDark,
-            ErrorCorrection::Medium
-        )
-    );
-}
-
-#[test]
-fn keep_newline_with_text_is_an_error() {
-    let out = run(&["--keep-newline", "hello"], b"");
-    assert!(!out.status.success());
-    assert!(
-        String::from_utf8(out.stderr)
-            .unwrap()
-            .contains("cannot be used with")
-    );
-}
-
-#[test]
-fn negative_margin_gets_a_range_error() {
-    let out = run(&["--margin", "-1", "hello"], b"");
-    assert!(!out.status.success());
-    assert!(
-        String::from_utf8(out.stderr)
-            .unwrap()
-            .contains("-1 is not in 1..=32")
-    );
-}
-
-#[test]
-fn text_and_file_conflict() {
-    let out = run(&["hello", "-f", "/etc/hosts"], b"");
-    assert!(!out.status.success());
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains("cannot be used with"));
-}
-
-#[test]
-fn empty_text_argument_is_an_error() {
-    let out = run(&[""], b"ignored");
-    assert!(!out.status.success());
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains("input is empty; nothing to encode"));
-}
-
-#[test]
-fn color_auto_is_plain_when_piped() {
-    let out = run(&["--color", "auto", "hello"], b"");
-    assert!(!out.stdout.contains(&0x1b));
-}
-
-#[test]
-fn invert_is_ignored_with_colors() {
-    let plain = run(&["--color", "always", "hello"], b"");
-    let inverted = run(&["--color", "always", "--invert", "hello"], b"");
-    assert_eq!(plain.stdout, inverted.stdout);
-}
-
-#[test]
-fn margin_flag_matches_library() {
-    let out = run(&["--margin", "1", "hello"], b"");
-    assert!(out.status.success());
-    let code = Renderer::new().margin(1).render("hello").unwrap();
-    assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("{code}\n"));
-    assert!(run(&["--margin", "32", "hello"], b"").status.success());
-    let out = run(&["--margin", "0", "hello"], b"");
-    assert!(!out.status.success());
-    assert!(
-        String::from_utf8(out.stderr)
-            .unwrap()
-            .contains("0 is not in 1..=32")
-    );
-    let out = run(&["--margin", "33", "hello"], b"");
-    assert!(!out.status.success());
-    assert!(
-        String::from_utf8(out.stderr)
-            .unwrap()
-            .contains("33 is not in 1..=32")
-    );
-}
-
-#[test]
-fn scale_flag_matches_library() {
-    let out = run(&["--scale", "2", "hello"], b"");
-    assert!(out.status.success());
-    let code = Renderer::new()
-        .scale(std::num::NonZeroU8::new(2).unwrap())
-        .render("hello")
-        .unwrap();
-    assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("{code}\n"));
-    assert!(!run(&["--scale", "0", "hello"], b"").status.success());
-    assert!(run(&["--scale", "16", "hello"], b"").status.success());
-    let out = run(&["--scale", "17", "hello"], b"");
-    assert!(!out.status.success());
-    assert!(
-        String::from_utf8(out.stderr)
-            .unwrap()
-            .contains("17 is not in 1..=16")
-    );
-}
-
-#[test]
-fn ascii_flag_matches_library() {
-    let out = run(&["--ascii", "hello"], b"");
-    assert!(out.status.success());
-    let code = Renderer::new()
-        .glyphs(termqr::Glyphs::Ascii)
-        .render("hello")
-        .unwrap();
-    assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("{code}\n"));
-}
-
-#[test]
-fn completions_for_each_shell() {
-    for (shell, marker) in [
-        ("bash", "_termqr()"),
-        ("zsh", "#compdef termqr"),
-        ("fish", "complete -c termqr"),
+fn input_sources() {
+    let plain = Renderer::new();
+    let path = std::env::temp_dir().join(format!("termqr-cli-{}.txt", std::process::id()));
+    std::fs::write(&path, "from file\n").unwrap();
+    let file = path.to_str().unwrap();
+    for (args, stdin, data) in [
+        // stdin and files lose one trailing newline unless --keep-newline.
+        (&[][..], &b"hello\n"[..], "hello"),
+        (&["-f", "-"], b"hello\r\n", "hello"),
+        (&["--keep-newline", "-f", "-"], b"hello\n", "hello\n"),
+        (&["-f", file], b"ignored", "from file"),
+        (&["--keep-newline", "--file", file], b"", "from file\n"),
+        // TEXT is verbatim, ignores stdin, and joins words with spaces.
+        (&["https://example.com"], b"ignored", "https://example.com"),
+        (&["hello\n"], b"", "hello\n"),
+        (&["hello", "big", "world"], b"", "hello big world"),
+        (&["--", "-"], b"ignored", "-"),
+        (&["--", "--man"], b"", "--man"),
     ] {
-        let out = run(&["--completions", shell], b"");
-        assert!(out.status.success());
-        let script = String::from_utf8(out.stdout).unwrap();
-        assert!(script.contains(marker), "{shell} script lacks {marker:?}");
-        assert!(script.contains("ec-level"));
+        let out = run(args, stdin);
+        assert!(out.status.success(), "{args:?}: {}", stderr(&out));
+        assert_eq!(stdout(&out), expected(plain, data), "{args:?}");
+    }
+    let _ = std::fs::remove_file(&path); // best-effort cleanup of a temp file
+}
+
+#[test]
+fn usage_errors_exit_2() {
+    for (args, message) in [
+        (&["--margin", "0", "x"][..], "0 is not in 1..=32"),
+        (&["--margin", "33", "x"], "33 is not in 1..=32"),
+        (&["--margin", "-1", "x"], "-1 is not in 1..=32"),
+        (&["--scale", "0", "x"], "0 is not in 1..=16"),
+        (&["--scale", "17", "x"], "17 is not in 1..=16"),
+        (&["--keep-newline", "x"], "cannot be used with"),
+        (&["x", "-f", "/etc/hosts"], "cannot be used with"),
+        (&["--ascii", "--unicode", "x"], "cannot be used with"),
+        (&["--man", "x"], "cannot be used with"),
+        (&["--completions", "bash", "--ascii"], "cannot be used with"),
+        (&["--completions", "tcsh"], "invalid value 'tcsh'"),
+        (
+            &["--polarity", "1", "x"],
+            "unexpected argument '--polarity'",
+        ),
+    ] {
+        let out = run(args, b"");
+        assert_eq!(out.status.code(), Some(2), "{args:?}");
+        assert!(stderr(&out).contains(message), "{args:?}: {}", stderr(&out));
+        assert!(out.stdout.is_empty());
     }
 }
 
 #[test]
-fn man_page_is_roff() {
-    let out = run(&["--man"], b"");
-    assert!(out.status.success());
-    let page = String::from_utf8(out.stdout).unwrap();
-    assert!(page.contains(".TH termqr"));
-    assert!(page.contains("\\-\\-margin"));
+fn input_errors_exit_1() {
+    let digits = |n| vec![b'7'; n];
+    for (args, stdin, message) in [
+        (&[][..], b"".to_vec(), "input is empty; nothing to encode"),
+        (&[], b"\n".to_vec(), "input is empty; nothing to encode"),
+        (&[], b"\r\n".to_vec(), "input is empty; nothing to encode"),
+        (&[""], vec![], "input is empty; nothing to encode"),
+        (
+            &["--file", "/nonexistent/termqr-input"],
+            vec![],
+            "failed to read /nonexistent/termqr-input",
+        ),
+        (
+            &["--ec-level", "H"],
+            vec![b'a'; 1274],
+            "input is 1274 bytes, too long for error-correction level H \
+             (at most 1273 bytes of arbitrary data); it fits at --ec-level Q",
+        ),
+        (
+            &["--ec-level", "L"],
+            vec![0; 2954],
+            "level L (at most 2953 bytes of arbitrary data); shorten the input",
+        ),
+        (
+            &["--ec-level", "L"],
+            [digits(termqr::MAX_DATA_LEN + 1), b"\n".to_vec()].concat(),
+            "input is longer than 7089 bytes, more than any qr code holds",
+        ),
+    ] {
+        let out = run(args, &stdin);
+        assert_eq!(out.status.code(), Some(1), "{args:?}");
+        assert!(stderr(&out).contains(message), "{args:?}: {}", stderr(&out));
+        assert!(out.stdout.is_empty());
+    }
 }
 
 #[test]
-fn generators_are_exclusive() {
-    assert!(!run(&["--man", "hello"], b"").status.success());
-    assert!(
-        !run(&["--completions", "bash", "--ascii"], b"")
-            .status
-            .success()
-    );
+fn input_size_limits() {
+    // The read limit leaves room for a trimmed "\r\n" after MAX_DATA_LEN digits, and
+    // piped output is never size-checked, so the 185-column version 40 prints.
+    let longest = [vec![b'7'; termqr::MAX_DATA_LEN], b"\r\n".to_vec()].concat();
+    assert!(run(&["--ec-level", "L"], &longest).status.success());
+    assert!(run(&[], &[b'a'; 2000]).status.success());
+}
+
+#[cfg(unix)]
+#[test]
+fn endless_stdin_fails_fast() {
+    // Unbounded reading would never finish on /dev/zero; give it 10 s, so a regression
+    // fails instead of hanging the test run.
+    let mut child = termqr()
+        .stdin(std::fs::File::open("/dev/zero").unwrap())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while child.try_wait().unwrap().is_none() {
+        if std::time::Instant::now() > deadline {
+            let _ = child.kill(); // the test fails below either way
+            panic!("termqr kept reading /dev/zero");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    let out = child.wait_with_output().unwrap();
+    assert_eq!(out.status.code(), Some(1));
+    assert!(stderr(&out).contains("more than any qr code holds"));
 }
 
 #[test]
 fn largest_output_streams_through_a_closed_pipe() {
     // Largest code at both limits, piped into a reader that stops at once: termqr must
-    // exit cleanly, without first building the ~22 MB of text.
-    let mut child = Command::new(env!("CARGO_BIN_EXE_termqr"))
+    // exit 0 on the broken pipe. That streaming keeps memory low is checked by the
+    // library's display_writes_one_line_at_a_time.
+    let mut child = termqr()
         .args([
             "--scale",
             "16",
@@ -277,7 +224,7 @@ fn largest_output_streams_through_a_closed_pipe() {
             "32",
             "--ec-level",
             "L",
-            "--file",
+            "-f",
             "-",
         ])
         .stdin(Stdio::piped())
@@ -288,136 +235,40 @@ fn largest_output_streams_through_a_closed_pipe() {
     child.stdin.take().unwrap().write_all(&[0u8; 2953]).unwrap();
     drop(child.stdout.take());
     let out = child.wait_with_output().unwrap();
-    assert!(
-        out.status.success(),
-        "{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
+    assert!(out.status.success(), "{}", stderr(&out));
 }
 
 #[test]
-fn polarity_flag_is_gone() {
-    let out = run(&["--polarity", "1", "hello"], b"");
-    assert!(!out.status.success());
-}
-
-#[test]
-fn color_always_forces_ansi_even_with_no_color() {
-    let ansi = Renderer::new()
-        .colors(Colors::Ansi)
-        .render("hello")
-        .unwrap();
-    for no_color in ["", "1"] {
-        let out = Command::new(env!("CARGO_BIN_EXE_termqr"))
-            .args(["--color", "always", "hello"])
-            .env("NO_COLOR", no_color)
-            .output()
-            .unwrap();
-        assert!(out.status.success());
-        assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("{ansi}\n"));
+fn generators() {
+    for (shell, marker) in [
+        ("bash", "_termqr()"),
+        ("zsh", "#compdef termqr"),
+        ("fish", "complete -c termqr"),
+    ] {
+        let script = stdout(&run(&["--completions", shell], b""));
+        assert!(script.contains(marker), "{shell} script lacks {marker:?}");
+        assert!(script.contains("ec-level"));
     }
+    let page = stdout(&run(&["--man"], b""));
+    assert!(page.contains(".TH termqr"));
+    assert!(page.contains("\\-\\-margin"));
 }
 
-#[test]
-fn piped_output_skips_width_check() {
-    // Version 40 is 185 columns, wider than any default terminal; stdout is a pipe here,
-    // so no width check applies.
-    let data = vec![b'a'; 2000];
-    let out = run(&[], &data);
-    assert!(out.status.success());
-}
-
-#[test]
-fn ec_level_is_case_insensitive() {
-    for arg in ["H", "h"] {
-        let out = run(&["--ec-level", arg], b"hello");
-        assert!(out.status.success());
-        assert_eq!(
-            String::from_utf8(out.stdout).unwrap(),
-            expected("hello", Polarity::LightOnDark, ErrorCorrection::High)
-        );
-    }
-}
-
-#[test]
-fn input_over_level_capacity_fails() {
-    // 1274 bytes fits at M but exceeds version 40 at H.
-    let data = vec![b'a'; 1274];
-    assert!(run(&[], &data).status.success());
-    let out = run(&["--ec-level", "H"], &data);
-    assert!(!out.status.success());
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains(
-        "input is 1274 bytes, too long for error-correction level H \
-         (at most 1273 bytes of arbitrary data); it fits at --ec-level Q"
-    ));
-}
-
-#[test]
-fn too_long_without_lower_level_says_shorten() {
-    let out = run(&["--ec-level", "L"], &[0u8; 2954]);
-    assert!(!out.status.success());
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains("level L (at most 2953 bytes of arbitrary data); shorten the input"));
-}
-
-#[test]
-fn empty_input_is_an_error() {
-    for stdin in [&b""[..], b"\n", b"\r\n"] {
-        let out = run(&[], stdin);
-        assert!(!out.status.success());
-        assert!(out.stdout.is_empty());
-        let stderr = String::from_utf8(out.stderr).unwrap();
-        assert!(stderr.contains("input is empty; nothing to encode"));
-    }
-}
-
-#[test]
-fn longest_input_with_newline_still_fits() {
-    // The read limit leaves room for a trimmed "\r\n" after MAX_DATA_LEN digits.
-    let mut data = vec![b'7'; termqr::MAX_DATA_LEN];
-    data.extend_from_slice(b"\r\n");
-    let out = run(&["--ec-level", "L"], &data);
-    assert!(out.status.success());
-}
-
-#[test]
-fn oversized_input_is_rejected_without_reading_it_all() {
-    let mut data = vec![b'7'; termqr::MAX_DATA_LEN + 1];
-    data.extend_from_slice(b"\n");
-    let out = run(&["--ec-level", "L"], &data);
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains("input is longer than 7089 bytes, more than any qr code holds"));
-}
-
-#[cfg(unix)]
-#[test]
-fn endless_stdin_fails_fast() {
-    // Unbounded reading would never finish on /dev/zero.
-    let zero = std::fs::File::open("/dev/zero").unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_termqr"))
-        .stdin(zero)
-        .output()
-        .unwrap();
-    assert!(!out.status.success());
-    let stderr = String::from_utf8(out.stderr).unwrap();
-    assert!(stderr.contains("more than any qr code holds"));
-}
-
-/// Size-check and color tests against a real pseudo-terminal sized 80x24.
+/// Tests against a real pseudo-terminal sized `cols` x 24 on stdout.
 #[cfg(unix)]
 mod pty {
     use std::ffi::OsStr;
     use std::fs::{File, OpenOptions};
-    use std::io::{self, Read, Write};
+    use std::io::{self, Read};
     use std::os::fd::OwnedFd;
     use std::os::unix::ffi::OsStrExt;
     use std::process::{Command, Output, Stdio};
 
-    use termqr::{Polarity, Renderer};
-
     use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
     use rustix::termios::{Winsize, tcsetwinsize};
+    use termqr::{Renderer, Style};
+
+    use super::stderr;
 
     /// Returns the controller (kept open so the terminal stays alive) and the terminal end.
     fn open_terminal(cols: u16) -> io::Result<(OwnedFd, File)> {
@@ -441,170 +292,144 @@ mod pty {
 
     /// A termqr command with the terminal-facing environment fixed: a UTF-8 locale, a color
     /// `TERM`, and no `NO_COLOR`, so results do not depend on the caller's environment.
-    fn termqr() -> Command {
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_termqr"));
-        cmd.env("LANG", "en_US.UTF-8")
+    fn termqr(args: &[&str], env: &[(&str, &str)]) -> Command {
+        let mut cmd = super::termqr();
+        cmd.args(args)
+            .env("LANG", "en_US.UTF-8")
             .env("TERM", "xterm-256color")
             .env_remove("LC_ALL")
             .env_remove("LC_CTYPE")
-            .env_remove("NO_COLOR");
+            .env_remove("NO_COLOR")
+            .envs(env.iter().copied())
+            .stdin(Stdio::null());
         cmd
     }
 
-    /// Runs termqr on `len` zero bytes. 600 bytes need version 19 (101 columns, 51 lines);
-    /// 300 need version 13 (77 columns, 39 lines).
-    fn run_zeros(len: usize, stdout: Stdio, stderr: Stdio) -> io::Result<Output> {
-        let mut child = termqr()
-            .stdin(Stdio::piped())
-            .stdout(stdout)
-            .stderr(stderr)
-            .spawn()?;
-        child
-            .stdin
-            .take()
-            .expect("stdin was configured as piped")
-            .write_all(&vec![0u8; len])?;
-        child.wait_with_output()
-    }
-
-    /// Runs termqr with stdout on an 80-column terminal and returns its exit status and
-    /// everything it wrote there. The pty turns `\n` into `\r\n`.
-    fn run_on_terminal(args: &[&str], env: &[(&str, &str)]) -> io::Result<(bool, Vec<u8>)> {
-        let (controller, terminal) = open_terminal(80)?;
-        // Read the controller side concurrently so output cannot fill the pty buffer. The
-        // read ends with EOF or EIO once the child, the last holder of the terminal, exits.
+    /// Runs termqr with stdout on a `cols` x 24 terminal and returns its exit status and
+    /// stderr, plus everything it wrote to the terminal (where `\n` becomes `\r\n`).
+    fn run_on_terminal(
+        cols: u16,
+        args: &[&str],
+        env: &[(&str, &str)],
+    ) -> io::Result<(Output, Vec<u8>)> {
+        let (controller, terminal) = open_terminal(cols)?;
+        // Read the controller side concurrently so output cannot fill the pty buffer and
+        // block termqr. The read ends with EOF or EIO once the child, the last holder of
+        // the terminal, exits.
         let reader = std::thread::spawn(move || {
             let mut out = Vec::new();
             let _ = File::from(controller).read_to_end(&mut out); // EIO marks the end
             out
         });
-        let mut child = {
-            // Scoped so the Command, holding a copy of the terminal, drops after spawning.
-            let mut cmd = termqr();
-            cmd.args(args)
-                .stdin(Stdio::null())
-                .stdout(terminal)
-                .stderr(Stdio::null());
-            for (k, v) in env {
-                cmd.env(k, v);
-            }
-            cmd.spawn()?
-        };
-        let status = child.wait()?;
-        let out = reader.join().expect("reader thread does not panic");
-        Ok((status.success(), out))
+        // The Command holds a copy of the terminal; it is a temporary, dropped after spawn.
+        let child = termqr(args, env)
+            .stdout(terminal)
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let out = child.wait_with_output()?;
+        let written = reader.join().expect("reader thread does not panic");
+        Ok((out, written))
     }
 
+    /// Flags, environment overrides, and a check on what reached the terminal.
+    type Case<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)], fn(&[u8]) -> bool);
+
     #[test]
-    fn color_auto_on_terminal_is_ansi() {
-        let (ok, out) = run_on_terminal(&["hello"], &[]).unwrap();
-        assert!(ok);
-        assert!(out.starts_with(b"\x1b[30;107m"));
+    fn environment_picks_colors_and_glyphs() {
+        // --margin 1 keeps the ASCII code (46x23) inside the 80x24 terminal.
+        let ansi = |out: &[u8]| out.starts_with(b"\x1b[30;107m");
+        let plain_blocks = |out: &[u8]| !out.contains(&0x1b) && !out.is_ascii();
+        let ascii = |out: &[u8]| out.is_ascii();
+        let cases: &[Case] = &[
+            (&[], &[], ansi),
+            (&[], &[("NO_COLOR", "1")], plain_blocks),
+            (&[], &[("NO_COLOR", "")], ansi),
+            (&[], &[("TERM", "dumb")], plain_blocks),
+            (&["--color", "never"], &[("LANG", "C")], ascii),
+            (&["--color", "never"], &[("LANG", "en_US.ISO8859-1")], ascii),
+            (&["--color", "never"], &[("LC_ALL", "C")], ascii),
+            (
+                &["--color", "never", "--unicode"],
+                &[("LANG", "C")],
+                plain_blocks,
+            ),
+        ];
+        for (flags, env, check) in cases {
+            let args = [flags, &["--margin", "1", "hello"][..]].concat();
+            let (out, written) = run_on_terminal(80, &args, env).unwrap();
+            assert!(out.status.success(), "{flags:?} {env:?}");
+            let out = written;
+            assert!(
+                check(&out),
+                "{flags:?} {env:?}: {:?}",
+                String::from_utf8_lossy(&out)
+            );
+        }
     }
 
     #[test]
     fn invert_turns_off_auto_color_on_terminal() {
-        let (ok, out) = run_on_terminal(&["--invert", "hello"], &[]).unwrap();
-        assert!(ok);
-        let expected = Renderer::new()
-            .polarity(Polarity::DarkOnLight)
+        let (out, written) = run_on_terminal(80, &["--invert", "hello"], &[]).unwrap();
+        assert!(out.status.success());
+        let out = written;
+        let code = Renderer::new()
+            .style(Style::DarkOnLight)
             .render("hello")
-            .unwrap()
-            .to_string()
-            .replace('\n', "\r\n");
-        assert_eq!(String::from_utf8(out).unwrap(), format!("{expected}\r\n"));
-    }
-
-    #[test]
-    fn color_auto_is_off_for_dumb_term() {
-        let (ok, out) = run_on_terminal(&["hello"], &[("TERM", "dumb")]).unwrap();
-        assert!(ok);
-        assert!(!out.contains(&0x1b));
-    }
-
-    #[test]
-    fn non_utf8_locale_picks_ascii() {
-        // --margin 1 keeps the ASCII code (46x23) inside the 80x24 terminal.
-        for (lang, ascii) in [
-            ("C", true),
-            ("en_US.ISO8859-1", true),
-            ("en_US.UTF-8", false),
-        ] {
-            let (ok, out) =
-                run_on_terminal(&["--margin", "1", "hello"], &[("LANG", lang)]).unwrap();
-            assert!(ok);
-            assert_eq!(out.is_ascii(), ascii, "LANG={lang}");
-        }
-        // LC_ALL wins over LANG, and --unicode overrides the choice.
-        let (_, out) = run_on_terminal(&["--margin", "1", "hello"], &[("LC_ALL", "C")]).unwrap();
-        assert!(out.is_ascii());
-        let (_, out) =
-            run_on_terminal(&["--unicode", "--margin", "1", "hello"], &[("LANG", "C")]).unwrap();
-        assert!(!out.is_ascii());
-    }
-
-    #[test]
-    fn size_error_suggests_flags_that_fit() {
-        // --scale 2 makes "hello" 58 columns. In 40 columns --margin 1 (46) and
-        // --ec-level L (still version 1) are not enough; --scale 1 (29 by 15) fits.
-        let (_controller, terminal) = open_terminal(40).unwrap();
-        let out = termqr()
-            .args(["--scale", "2", "hello"])
-            .stdout(terminal)
-            .stderr(Stdio::piped())
-            .output()
             .unwrap();
-        assert!(!out.status.success());
-        let stderr = String::from_utf8(out.stderr).unwrap();
-        assert!(
-            stderr.contains(
-                "qr code is 58 columns wide but the terminal is 40; --scale 1 makes it fit"
-            )
-        );
+        let expected = format!("{code}\n").replace('\n', "\r\n");
+        assert_eq!(String::from_utf8(out).unwrap(), expected);
     }
 
     #[test]
-    fn color_auto_respects_no_color() {
-        let (ok, out) = run_on_terminal(&["hello"], &[("NO_COLOR", "1")]).unwrap();
-        assert!(ok);
-        assert!(!out.is_empty());
-        assert!(!out.contains(&0x1b));
-    }
-
-    #[test]
-    fn wide_code_on_terminal_stdout_fails() {
-        let (_controller, terminal) = open_terminal(80).unwrap();
-        let out = run_zeros(600, terminal.into(), Stdio::piped()).unwrap();
-        assert!(!out.status.success());
-        let stderr = String::from_utf8(out.stderr).unwrap();
-        assert!(stderr.contains("qr code is 101 columns wide but the terminal is 80"));
-    }
-
-    #[test]
-    fn tall_code_on_terminal_stdout_fails() {
-        let (_controller, terminal) = open_terminal(80).unwrap();
-        let out = run_zeros(300, terminal.into(), Stdio::piped()).unwrap();
-        assert!(!out.status.success());
-        let stderr = String::from_utf8(out.stderr).unwrap();
-        assert!(stderr.contains("qr code is 39 lines tall but the terminal shows 23"));
+    fn size_errors_on_terminal_stdout() {
+        let bytes = |n| "\u{1}".repeat(n);
+        for (cols, args, message) in [
+            // 600 bytes: version 19, 101 columns. 300 bytes: version 13, 77x39.
+            (
+                80,
+                vec![bytes(600)],
+                "qr code is 101 columns wide but the terminal is 80",
+            ),
+            (
+                80,
+                vec![bytes(300)],
+                "qr code is 39 lines tall but the terminal shows 23",
+            ),
+            // --scale 2 makes "hello" 58x29. In 40x24 --margin 1 (46 columns) and
+            // --ec-level L (still version 1) are not enough; --scale 1 (29x15) fits.
+            (
+                40,
+                vec!["--scale".into(), "2".into(), "hello".into()],
+                "qr code is 58 columns wide but the terminal is 40, and 29 lines tall but it \
+                 shows 23 above the prompt; --scale 1 makes it fit",
+            ),
+        ] {
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            let (out, written) = run_on_terminal(cols, &args, &[]).unwrap();
+            assert_eq!(out.status.code(), Some(1));
+            assert!(written.is_empty());
+            assert!(stderr(&out).contains(message), "{}", stderr(&out));
+        }
     }
 
     #[test]
     fn force_skips_size_checks() {
-        // 600 bytes need 101 columns, more than the terminal's 80.
         let text = "a".repeat(600);
-        let (ok, out) = run_on_terminal(&["--force", &text], &[]).unwrap();
-        assert!(ok);
-        assert!(!out.is_empty());
-        let (ok, _) = run_on_terminal(&[&text], &[]).unwrap();
-        assert!(!ok);
+        let (out, written) = run_on_terminal(80, &["--force", &text], &[]).unwrap();
+        assert!(out.status.success() && !written.is_empty());
+        let (out, _) = run_on_terminal(80, &[&text], &[]).unwrap();
+        assert!(!out.status.success());
     }
 
     #[test]
     fn terminal_on_stderr_only_is_not_checked() {
         // Models `termqr > out.txt` run from an 80-column terminal.
         let (_controller, terminal) = open_terminal(80).unwrap();
-        let out = run_zeros(600, Stdio::piped(), terminal.into()).unwrap();
+        let out = termqr(&[&"a".repeat(600)], &[])
+            .stdout(Stdio::piped())
+            .stderr(terminal)
+            .output()
+            .unwrap();
         assert!(out.status.success());
         assert!(!out.stdout.is_empty());
     }

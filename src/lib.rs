@@ -1,7 +1,7 @@
 //! Render QR codes for display in a terminal emulator.
 //!
-//! Encoding is done by the [`qrcode`] crate; [`Renderer`] turns the module grid into text
-//! a terminal can show.
+//! [`Renderer`] encodes data with the [`qrcode`] crate and returns a [`Rendered`] code,
+//! which draws itself as text through `Display`.
 //!
 //! ```
 //! let code = termqr::Renderer::new().render("https://example.com")?;
@@ -10,6 +10,7 @@
 //! ```
 
 use std::fmt;
+use std::iter;
 use std::num::NonZeroU8;
 
 use qrcode::bits::Bits;
@@ -20,6 +21,9 @@ use qrcode::{EcLevel, QrCode};
 /// Longest input, in bytes, that any QR code can hold: 7089 digits at version 40, level L.
 /// Longer input always fails, so readers can stop after `MAX_DATA_LEN + 1` bytes.
 pub const MAX_DATA_LEN: usize = 7089;
+
+/// Modules of light border (quiet zone) the QR spec requires around the code.
+pub const DEFAULT_MARGIN: u8 = 4;
 
 /// Errors returned while building a QR code.
 #[derive(Debug, thiserror::Error)]
@@ -38,35 +42,27 @@ pub enum Error {
     Encode(#[source] QrError),
 }
 
-/// Which modules are drawn with filled glyphs.
-///
-/// Filled glyphs take the terminal's foreground color. A scanner needs dark modules on a
-/// light background, so pick the variant matching the terminal's theme.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
-#[non_exhaustive]
-pub enum Polarity {
-    /// Light foreground on a dark background: light modules are filled.
-    #[default]
-    LightOnDark,
-    /// Dark foreground on a light background: dark modules are filled.
-    DarkOnLight,
-}
-
 /// QR error-correction level: the share of codewords that can be damaged and still decode.
 ///
 /// Higher levels survive more damage but hold less data, so the same input needs a larger
 /// code. The byte capacity listed for each level is that of version 40, the largest code.
+/// With the `cli` feature it is a `clap::ValueEnum` spelled `L`, `M`, `Q`, `H`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 #[non_exhaustive]
 pub enum ErrorCorrection {
     /// About 7% recoverable; at most 2953 bytes.
+    #[cfg_attr(feature = "cli", value(name = "L"))]
     Low,
     /// About 15% recoverable; at most 2331 bytes.
     #[default]
+    #[cfg_attr(feature = "cli", value(name = "M"))]
     Medium,
     /// About 25% recoverable; at most 1663 bytes.
+    #[cfg_attr(feature = "cli", value(name = "Q"))]
     Quartile,
     /// About 30% recoverable; at most 1273 bytes.
+    #[cfg_attr(feature = "cli", value(name = "H"))]
     High,
 }
 
@@ -110,17 +106,19 @@ impl From<ErrorCorrection> for EcLevel {
     }
 }
 
-/// Where the code's colors come from.
+/// How modules map to colors. Scanners need dark modules on a light background.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
-pub enum Colors {
-    /// Plain glyphs in the terminal's own colors; [`Polarity`] decides which modules are
-    /// filled.
+pub enum Style {
+    /// Plain glyphs in the terminal's colors with light modules filled, for terminals with
+    /// a dark background.
     #[default]
-    Plain,
+    LightOnDark,
+    /// Plain glyphs with dark modules filled, for terminals with a light background.
+    DarkOnLight,
     /// ANSI escapes force black modules on a bright-white background on every line, so
-    /// the code scans whatever the terminal theme: SGR `30;107` with half blocks, `40` and
-    /// `107` backgrounds with ASCII. [`Polarity`] is ignored.
+    /// the code scans on any theme: SGR `30;107` with half blocks, `40` and `107`
+    /// backgrounds with ASCII.
     Ansi,
 }
 
@@ -133,24 +131,21 @@ pub enum Glyphs {
     HalfBlock,
     /// ASCII only: `##` or two spaces per module, one line tall, so twice as wide as
     /// [`Glyphs::HalfBlock`]. Works in non-UTF-8 terminals and in terminals that draw the
-    /// block characters two columns wide. With [`Colors::Ansi`], modules are colored
+    /// block characters two columns wide. With [`Style::Ansi`], modules are colored
     /// spaces.
     Ascii,
 }
-
-/// Modules of light border (quiet zone) the QR spec requires around the code.
-pub const DEFAULT_MARGIN: u8 = 4;
 
 /// Renders QR codes as terminal text. Modules stay square in the usual 1:2 character cell:
 /// [`Glyphs::HalfBlock`] puts two module rows on each line, [`Glyphs::Ascii`] draws each
 /// module two characters wide.
 ///
 /// ```
-/// use termqr::{Colors, ErrorCorrection, Renderer};
+/// use termqr::{ErrorCorrection, Renderer, Style};
 ///
 /// let code = Renderer::new()
 ///     .error_correction(ErrorCorrection::High)
-///     .colors(Colors::Ansi)
+///     .style(Style::Ansi)
 ///     .render("https://example.com")?;
 /// println!("{code}");
 /// # Ok::<(), termqr::Error>(())
@@ -158,42 +153,30 @@ pub const DEFAULT_MARGIN: u8 = 4;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Renderer {
     error_correction: ErrorCorrection,
-    polarity: Polarity,
-    colors: Colors,
+    style: Style,
+    glyphs: Glyphs,
     margin: u8,
     scale: NonZeroU8,
-    glyphs: Glyphs,
 }
 
 impl Default for Renderer {
     fn default() -> Self {
         Self {
             error_correction: ErrorCorrection::default(),
-            polarity: Polarity::default(),
-            colors: Colors::default(),
+            style: Style::default(),
+            glyphs: Glyphs::default(),
             margin: DEFAULT_MARGIN,
             scale: NonZeroU8::MIN,
-            glyphs: Glyphs::default(),
         }
     }
 }
 
 impl Renderer {
-    /// A renderer with level M, [`Polarity::LightOnDark`], [`Colors::Plain`], a
-    /// [`DEFAULT_MARGIN`]-module quiet zone, scale 1, and [`Glyphs::HalfBlock`].
+    /// A renderer with level M, [`Style::LightOnDark`], [`Glyphs::HalfBlock`], a
+    /// [`DEFAULT_MARGIN`]-module quiet zone, and scale 1.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Sets the quiet zone, in modules on each side. The spec requires 4; most scanners
-    /// read 1 or 2, which saves space in small terminals. With 0 the code touches the
-    /// terminal background, which scanners read as part of the code unless it is light and
-    /// colors are [`Colors::Ansi`] or polarity is [`Polarity::DarkOnLight`].
-    #[must_use]
-    pub fn margin(mut self, modules: u8) -> Self {
-        self.margin = modules;
-        self
     }
 
     /// Sets the error-correction level.
@@ -203,18 +186,10 @@ impl Renderer {
         self
     }
 
-    /// Sets which modules are filled when colors are [`Colors::Plain`].
+    /// Sets how modules map to colors.
     #[must_use]
-    pub fn polarity(mut self, polarity: Polarity) -> Self {
-        self.polarity = polarity;
-        self
-    }
-
-    /// Draws each module `factor` columns wide and `factor` half-lines tall, for codes
-    /// that must scan from farther away. The margin scales with it.
-    #[must_use]
-    pub fn scale(mut self, factor: NonZeroU8) -> Self {
-        self.scale = factor;
+    pub fn style(mut self, style: Style) -> Self {
+        self.style = style;
         self
     }
 
@@ -225,35 +200,35 @@ impl Renderer {
         self
     }
 
-    /// Sets where colors come from.
+    /// Sets the quiet zone, in modules on each side. The spec requires 4; most scanners
+    /// read 1 or 2, which saves space in small terminals. With 0 the code touches the
+    /// terminal background, which scanners read as part of the code unless it is light and
+    /// the style is [`Style::Ansi`] or [`Style::DarkOnLight`].
     #[must_use]
-    pub fn colors(mut self, colors: Colors) -> Self {
-        self.colors = colors;
+    pub fn margin(mut self, modules: u8) -> Self {
+        self.margin = modules;
+        self
+    }
+
+    /// Draws each module `factor` times larger, for codes that must scan from farther
+    /// away: `factor` columns by `factor` half-lines with half blocks, twice as many columns
+    /// by `factor` lines with ASCII. The margin scales with it.
+    #[must_use]
+    pub fn scale(mut self, factor: NonZeroU8) -> Self {
+        self.scale = factor;
         self
     }
 
     /// Encodes `data` in the smallest QR version that holds it and renders it, including
-    /// the quiet zone. Lines are joined with `\n`, with no trailing newline.
+    /// the quiet zone.
     ///
     /// # Errors
     ///
     /// Returns [`Error::TooLong`] if `data` does not fit in any QR version at the chosen
     /// level, and [`Error::Encode`] for any other encoder failure.
     pub fn render(&self, data: impl AsRef<[u8]>) -> Result<Rendered, Error> {
-        let data = data.as_ref();
-        let code = encode(data, self.error_correction)?;
-
-        let modules = code.width();
-        let dark = code
-            .to_colors()
-            .into_iter()
-            .map(|c| c == Color::Dark)
-            .collect();
-        Ok(Rendered {
-            dark,
-            modules,
-            settings: *self,
-        })
+        let code = encode(data.as_ref(), self.error_correction)?;
+        Ok(Rendered::new(&code, *self))
     }
 }
 
@@ -262,6 +237,15 @@ impl Renderer {
 /// into Kanji segments, and scanners decode those as Shift JIS, which garbles UTF-8 text
 /// such as Japanese.
 fn encode(data: &[u8], level: ErrorCorrection) -> Result<QrCode, Error> {
+    let too_long = Error::TooLong {
+        len: data.len(),
+        level,
+    };
+    // Nothing longer fits; checking first keeps huge input from being parsed and pushed
+    // through all 40 versions.
+    if data.len() > MAX_DATA_LEN {
+        return Err(too_long);
+    }
     let segments: Vec<Segment> = Parser::new(data)
         .map(|s| match s.mode {
             Mode::Kanji => Segment {
@@ -284,119 +268,119 @@ fn encode(data: &[u8], level: ErrorCorrection) -> Result<QrCode, Error> {
             Err(e) => return Err(Error::Encode(e)),
         }
     }
-    Err(Error::TooLong {
-        len: data.len(),
-        level,
-    })
+    Err(too_long)
 }
 
-/// SGR black foreground on bright-white background.
+/// SGR black foreground on bright-white background, for half blocks.
 const ANSI_DARK_ON_LIGHT: &str = "\x1b[30;107m";
-const ANSI_RESET: &str = "\x1b[0m";
-/// SGR black and bright-white backgrounds, for [`Glyphs::Ascii`] with [`Colors::Ansi`].
+/// SGR black and bright-white backgrounds, for ASCII.
 const ANSI_BG_BLACK: &str = "\x1b[40m";
 const ANSI_BG_WHITE: &str = "\x1b[107m";
+const ANSI_RESET: &str = "\x1b[0m";
 
-/// A rendered code. It holds only the module grid and produces text on demand, one line
-/// at a time, so `Display` output of any scale needs memory for one line only. Size
-/// accessors exclude ANSI escapes.
+/// A rendered code. It holds the bordered module grid and produces text one line at a
+/// time, so `Display` output of any scale needs memory for one line only. Size accessors
+/// exclude ANSI escapes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Rendered {
-    /// Row-major, `modules * modules`, `true` for dark.
-    dark: Vec<bool>,
-    modules: usize,
-    settings: Renderer,
+    /// Row-major `side * side` modules, quiet zone included, `true` where the glyph is
+    /// filled. The style is already applied.
+    filled: Vec<bool>,
+    /// Modules per side, quiet zone included.
+    side: usize,
+    scale: usize,
+    glyphs: Glyphs,
+    ansi: bool,
 }
 
 impl Rendered {
+    fn new(code: &QrCode, settings: Renderer) -> Self {
+        let modules = code.width();
+        let margin = usize::from(settings.margin);
+        let side = modules + 2 * margin;
+        // Every style but LightOnDark fills the dark modules. The quiet zone is light.
+        let fill_dark = settings.style != Style::LightOnDark;
+        let mut filled = vec![!fill_dark; side * side];
+        for (i, color) in code.to_colors().into_iter().enumerate() {
+            let (y, x) = (margin + i / modules, margin + i % modules);
+            filled[y * side + x] = (color == Color::Dark) == fill_dark;
+        }
+        Self {
+            filled,
+            side,
+            scale: usize::from(settings.scale.get()),
+            glyphs: settings.glyphs,
+            ansi: settings.style == Style::Ansi,
+        }
+    }
+
     /// Width in terminal columns.
     #[must_use]
     pub fn columns(&self) -> usize {
-        match self.settings.glyphs {
-            Glyphs::HalfBlock => self.cells(),
-            Glyphs::Ascii => 2 * self.cells(),
+        match self.glyphs {
+            Glyphs::HalfBlock => self.side * self.scale,
+            Glyphs::Ascii => 2 * self.side * self.scale,
         }
     }
 
     /// Height in lines.
     #[must_use]
     pub fn lines(&self) -> usize {
-        match self.settings.glyphs {
-            Glyphs::HalfBlock => self.cells().div_ceil(2),
-            Glyphs::Ascii => self.cells(),
+        match self.glyphs {
+            Glyphs::HalfBlock => (self.side * self.scale).div_ceil(2),
+            Glyphs::Ascii => self.side * self.scale,
         }
     }
 
-    /// Side of the bordered, scaled grid in cells. A cell is one column by half a line
-    /// with half blocks, two columns by one line with ASCII.
-    fn cells(&self) -> usize {
-        let margin = usize::from(self.settings.margin);
-        (self.modules + 2 * margin) * usize::from(self.settings.scale.get())
-    }
-
-    /// Whether cell (x, y) gets a filled glyph. Rows past the bottom (the odd half of the
-    /// last half-block line) are never filled, so they show the background.
-    fn filled(&self, x: usize, y: usize) -> bool {
-        if y >= self.cells() {
-            return false;
-        }
-        let scale = usize::from(self.settings.scale.get());
-        let margin = usize::from(self.settings.margin);
-        let (x, y) = (x / scale, y / scale);
-        let modules = self.modules;
-        let is_dark = x >= margin
-            && y >= margin
-            && x < margin + modules
-            && y < margin + modules
-            && self.dark[(y - margin) * modules + (x - margin)];
-        match (self.settings.colors, self.settings.polarity) {
-            (Colors::Ansi, _) | (Colors::Plain, Polarity::DarkOnLight) => is_dark,
-            (Colors::Plain, Polarity::LightOnDark) => !is_dark,
-        }
+    /// The module row drawn at scaled row `y`, or `None` past the bottom: the lower half
+    /// of the last half-block line when the scaled side is odd, which shows the background.
+    fn row(&self, y: usize) -> Option<&[bool]> {
+        let start = y / self.scale * self.side;
+        self.filled.get(start..start + self.side)
     }
 
     /// Appends output line `line` (without newline) to `out`.
     fn push_line(&self, line: usize, out: &mut String) {
-        let cells = self.cells();
-        let ansi = self.settings.colors == Colors::Ansi;
-        match self.settings.glyphs {
+        match self.glyphs {
             Glyphs::HalfBlock => {
-                if ansi {
+                if self.ansi {
                     out.push_str(ANSI_DARK_ON_LIGHT);
                 }
-                for x in 0..cells {
-                    out.push(
-                        match (self.filled(x, 2 * line), self.filled(x, 2 * line + 1)) {
-                            (true, true) => '\u{2588}',
-                            (true, false) => '\u{2580}',
-                            (false, true) => '\u{2584}',
-                            (false, false) => ' ',
-                        },
-                    );
-                }
-                if ansi {
-                    out.push_str(ANSI_RESET);
+                let top = self.row(2 * line).expect("line is below lines()");
+                let bottom = self.row(2 * line + 1);
+                for (x, &upper) in top.iter().enumerate() {
+                    let glyph = match (upper, bottom.is_some_and(|b| b[x])) {
+                        (true, true) => '\u{2588}',
+                        (true, false) => '\u{2580}',
+                        (false, true) => '\u{2584}',
+                        (false, false) => ' ',
+                    };
+                    out.extend(iter::repeat_n(glyph, self.scale));
                 }
             }
-            Glyphs::Ascii if ansi => {
-                // `#` leaves gaps in its cell, so color spaces instead; an escape is
-                // emitted only where the color changes.
-                let mut current = None;
-                for x in 0..cells {
-                    let dark = self.filled(x, line);
-                    if current != Some(dark) {
-                        out.push_str(if dark { ANSI_BG_BLACK } else { ANSI_BG_WHITE });
-                        current = Some(dark);
-                    }
-                    out.push_str("  ");
+            Glyphs::Ascii if self.ansi => {
+                // `#` leaves gaps in its cell, so draw colored spaces, with an escape only
+                // where the color changes.
+                for run in self
+                    .row(line)
+                    .expect("line is below lines()")
+                    .chunk_by(|a, b| a == b)
+                {
+                    out.push_str(if run[0] { ANSI_BG_BLACK } else { ANSI_BG_WHITE });
+                    out.extend(iter::repeat_n(' ', 2 * run.len() * self.scale));
                 }
-                out.push_str(ANSI_RESET);
             }
             Glyphs::Ascii => {
-                for x in 0..cells {
-                    out.push_str(if self.filled(x, line) { "##" } else { "  " });
+                for &filled in self.row(line).expect("line is below lines()") {
+                    let cell = if filled { "##" } else { "  " };
+                    for _ in 0..self.scale {
+                        out.push_str(cell);
+                    }
                 }
             }
+        }
+        if self.ansi {
+            out.push_str(ANSI_RESET);
         }
     }
 }
@@ -438,36 +422,43 @@ mod tests {
             .unwrap()
     }
 
-    /// `code` drawn the way `Renderer::new()` draws, via qrcode's own renderer.
-    fn dense1x2(code: &QrCode) -> String {
+    /// `code` drawn by qrcode's own half-block renderer, light or dark modules filled.
+    fn dense1x2(code: &QrCode, style: Style) -> String {
         use qrcode::render::unicode::Dense1x2;
+        let (dark, light) = match style {
+            Style::LightOnDark => (Dense1x2::Light, Dense1x2::Dark),
+            _ => (Dense1x2::Dark, Dense1x2::Light),
+        };
         code.render::<Dense1x2>()
-            .dark_color(Dense1x2::Light)
-            .light_color(Dense1x2::Dark)
+            .dark_color(dark)
+            .light_color(light)
             .quiet_zone(true)
             .build()
     }
 
     #[test]
-    fn utf8_text_is_not_kanji_encoded() {
+    fn shift_jis_lookalikes_are_not_kanji_encoded() {
         // qrcode's optimizer puts byte pairs that look like Shift JIS into Kanji mode, and
-        // scanners decode those as Shift JIS: this text came out as "...隱槭...".
-        let text = "日本語のテキスト".as_bytes();
-        let reference = byte_mode_code(text, EcLevel::M);
+        // scanners decode those as Shift JIS: the UTF-8 text came out as "...隱槭...".
+        // Real Shift JIS input gets byte mode too, since its encoding is unknowable.
+        let utf8 = "日本語のテキスト".as_bytes();
+        let shift_jis = b"\x93\xfa\x96{\x8c\xea\x82\xcc";
         assert_ne!(
-            dense1x2(&QrCode::new(text).unwrap()),
-            dense1x2(&reference),
+            dense1x2(&QrCode::new(utf8).unwrap(), Style::LightOnDark),
+            dense1x2(&byte_mode_code(utf8, EcLevel::M), Style::LightOnDark),
             "qrcode no longer picks Kanji mode here; pick another input"
         );
-        let ours = Renderer::new().render(text).unwrap();
-        assert_eq!(ours.to_string(), dense1x2(&reference));
+        for data in [utf8, shift_jis] {
+            let ours = Renderer::new().render(data).unwrap();
+            let reference = byte_mode_code(data, EcLevel::M);
+            assert_eq!(ours.to_string(), dense1x2(&reference, Style::LightOnDark));
+        }
     }
 
     #[test]
-    fn plain_matches_qrcode_dense1x2() {
-        use qrcode::render::unicode::Dense1x2;
+    fn plain_styles_match_qrcode_dense1x2() {
         // Inputs without Shift JIS byte pairs, covering byte, numeric, and alphanumeric
-        // segments, where termqr and qrcode should encode identically.
+        // segments, where termqr and qrcode encode identically.
         for data in [
             "hello",
             "https://example.com",
@@ -475,121 +466,75 @@ mod tests {
             "HTTPS://EXAMPLE.COM/A1",
         ] {
             let code = QrCode::new(data).unwrap();
-            for (polarity, dark, light) in [
-                (Polarity::LightOnDark, Dense1x2::Light, Dense1x2::Dark),
-                (Polarity::DarkOnLight, Dense1x2::Dark, Dense1x2::Light),
-            ] {
-                let reference = code
-                    .render::<Dense1x2>()
-                    .dark_color(dark)
-                    .light_color(light)
-                    .quiet_zone(true)
-                    .build();
-                let ours = Renderer::new().polarity(polarity).render(data).unwrap();
-                assert_eq!(ours.to_string(), reference);
+            for style in [Style::LightOnDark, Style::DarkOnLight] {
+                let ours = Renderer::new().style(style).render(data).unwrap();
+                assert_eq!(ours.to_string(), dense1x2(&code, style), "{data} {style:?}");
             }
         }
     }
 
     #[test]
     fn size_accessors() {
-        // Version 1: 21 modules plus two 4-module quiet zones.
-        let code = Renderer::new().render("hello").unwrap();
-        assert_eq!(code.columns(), 29);
-        assert_eq!(code.lines(), 15);
-        assert!(code.to_string().lines().all(|l| l.chars().count() == 29));
-        assert_eq!(code.to_string().lines().count(), 15);
-    }
-
-    #[test]
-    fn margin_sets_quiet_zone() {
-        // Version 1 is 21 modules; lines are ceil(size / 2).
-        for (margin, columns, lines) in [(0, 21, 11), (1, 23, 12), (2, 25, 13), (4, 29, 15)] {
-            let code = Renderer::new().margin(margin).render("hello").unwrap();
-            assert_eq!((code.columns(), code.lines()), (columns, lines));
-        }
-        // With LightOnDark the quiet zone is filled, so margin 1 gives a filled first row.
-        let code = Renderer::new().margin(1).render("hello").unwrap();
-        assert!(
-            code.to_string()
-                .lines()
-                .next()
-                .unwrap()
-                .starts_with('\u{2588}')
-        );
-    }
-
-    #[test]
-    fn scale_repeats_modules() {
-        let scaled = |n| {
-            Renderer::new()
-                .scale(NonZeroU8::new(n).unwrap())
+        // "hello" is version 1: 21 modules. Columns and lines for (glyphs, margin, scale).
+        for (glyphs, margin, scale, columns, lines) in [
+            (Glyphs::HalfBlock, 4, 1, 29, 15),
+            (Glyphs::HalfBlock, 0, 1, 21, 11),
+            (Glyphs::HalfBlock, 1, 1, 23, 12),
+            (Glyphs::HalfBlock, 4, 3, 87, 44),
+            (Glyphs::Ascii, 4, 1, 58, 29),
+            (Glyphs::Ascii, 1, 2, 92, 46),
+        ] {
+            let code = Renderer::new()
+                .glyphs(glyphs)
+                .margin(margin)
+                .scale(NonZeroU8::new(scale).unwrap())
                 .render("hello")
-                .unwrap()
-        };
-        // 29 cells per side at scale 1; lines hold two cells.
-        let three = scaled(3);
-        assert_eq!((three.columns(), three.lines()), (87, 44));
-        for line in three.to_string().lines() {
-            let chars: Vec<char> = line.chars().collect();
-            assert!(chars.chunks(3).all(|g| g.iter().all(|&c| c == g[0])));
-        }
-        // At scale 2 each line is exactly one module row, so no half blocks appear.
-        let two = scaled(2);
-        assert_eq!(two.lines(), 29);
-        assert!(!two.to_string().contains(['\u{2580}', '\u{2584}']));
-    }
-
-    #[test]
-    fn ascii_matches_half_block_cells() {
-        let half = Renderer::new()
-            .polarity(Polarity::DarkOnLight)
-            .render("hello")
-            .unwrap();
-        let ascii = Renderer::new()
-            .polarity(Polarity::DarkOnLight)
-            .glyphs(Glyphs::Ascii)
-            .render("hello")
-            .unwrap();
-        assert_eq!((ascii.columns(), ascii.lines()), (58, 29));
-        assert!(ascii.to_string().is_ascii());
-        let half: Vec<Vec<char>> = half
-            .to_string()
-            .lines()
-            .map(|l| l.chars().collect())
-            .collect();
-        for (y, line) in ascii.to_string().lines().enumerate() {
-            let line = line.as_bytes();
-            for x in 0..29 {
-                let glyph = half[y / 2][x];
-                let filled = match glyph {
-                    '\u{2588}' => true,
-                    '\u{2580}' => y % 2 == 0,
-                    '\u{2584}' => y % 2 == 1,
-                    _ => false,
-                };
-                let expected: &[u8] = if filled { b"##" } else { b"  " };
-                assert_eq!(&line[2 * x..2 * x + 2], expected);
-            }
+                .unwrap();
+            assert_eq!((code.columns(), code.lines()), (columns, lines));
+            let text = code.to_string();
+            assert_eq!(text.lines().count(), lines);
+            assert!(text.lines().all(|l| l.chars().count() == columns));
         }
     }
 
     #[test]
-    fn ascii_ansi_uses_colored_spaces() {
+    fn ansi_half_blocks_wrap_dark_on_light_lines() {
+        let ansi = Renderer::new().style(Style::Ansi).render("hello").unwrap();
+        let plain = Renderer::new()
+            .style(Style::DarkOnLight)
+            .render("hello")
+            .unwrap();
+        assert_eq!(ansi.lines(), plain.lines());
+        for (a, p) in ansi.to_string().lines().zip(plain.to_string().lines()) {
+            assert_eq!(a, format!("{ANSI_DARK_ON_LIGHT}{p}{ANSI_RESET}"));
+        }
+    }
+
+    #[test]
+    fn ansi_ascii_colors_runs_of_spaces() {
         let code = Renderer::new()
+            .style(Style::Ansi)
             .glyphs(Glyphs::Ascii)
-            .colors(Colors::Ansi)
+            .scale(NonZeroU8::new(2).unwrap())
             .render("hello")
             .unwrap();
-        assert!(code.to_string().is_ascii());
-        assert!(!code.to_string().contains('#'));
-        // The first line is all quiet zone: one white run, then the reset.
         let text = code.to_string();
+        assert!(text.is_ascii() && !text.contains('#'));
+        // The first line is all quiet zone: one white run, then the reset.
         let first = text.lines().next().unwrap();
         assert_eq!(
             first,
-            format!("{ANSI_BG_WHITE}{}{ANSI_RESET}", " ".repeat(58))
+            format!("{ANSI_BG_WHITE}{}{ANSI_RESET}", " ".repeat(116))
         );
+        // Colors alternate: no escape repeats the color already in effect.
+        for line in text.lines() {
+            let colors: Vec<&str> = line
+                .split('\x1b')
+                .filter_map(|s| s.split_once('m').map(|(code, _)| code))
+                .filter(|&code| code != "[0")
+                .collect();
+            assert!(colors.windows(2).all(|w| w[0] != w[1]), "{line:?}");
+        }
     }
 
     #[test]
@@ -605,7 +550,7 @@ mod tests {
         }
         let code = Renderer::new()
             .scale(NonZeroU8::new(16).unwrap())
-            .colors(Colors::Ansi)
+            .style(Style::Ansi)
             .render("hello")
             .unwrap();
         let mut sink = MaxChunk(0);
@@ -614,40 +559,6 @@ mod tests {
         let line_bytes = ANSI_DARK_ON_LIGHT.len() + 3 * code.columns() + ANSI_RESET.len();
         assert!(sink.0 <= line_bytes);
         assert!(code.to_string().len() > 100 * line_bytes);
-    }
-
-    #[test]
-    fn ansi_wraps_dark_on_light_lines() {
-        let ansi = Renderer::new()
-            .colors(Colors::Ansi)
-            .render("hello")
-            .unwrap();
-        let plain = Renderer::new()
-            .polarity(Polarity::DarkOnLight)
-            .render("hello")
-            .unwrap();
-        assert_eq!(
-            (ansi.columns(), ansi.lines()),
-            (plain.columns(), plain.lines())
-        );
-        for (a, p) in ansi.to_string().lines().zip(plain.to_string().lines()) {
-            assert_eq!(a, format!("{ANSI_DARK_ON_LIGHT}{p}{ANSI_RESET}"));
-        }
-    }
-
-    #[test]
-    fn ansi_ignores_polarity() {
-        let r = Renderer::new().colors(Colors::Ansi);
-        assert_eq!(
-            r.polarity(Polarity::LightOnDark)
-                .render("hello")
-                .unwrap()
-                .to_string(),
-            r.polarity(Polarity::DarkOnLight)
-                .render("hello")
-                .unwrap()
-                .to_string()
-        );
     }
 
     #[test]
@@ -688,5 +599,27 @@ mod tests {
             render_at(data, ErrorCorrection::High).unwrap().columns(),
             37
         );
+    }
+
+    #[test]
+    fn oversized_input_fails_before_encoding() {
+        // Encoding parses every byte and tries all 40 versions, which took seconds and
+        // hundreds of MB for tens of MiB of input. Anything over MAX_DATA_LEN cannot fit.
+        // Alternating modes makes many segments; one long run would fail fast anyway.
+        let data: Vec<u8> = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123a"
+            .iter()
+            .copied()
+            .cycle()
+            .take(4 << 20)
+            .collect();
+        let start = std::time::Instant::now();
+        let err = render_at(&data, ErrorCorrection::Low).unwrap_err();
+        assert!(matches!(err, Error::TooLong { len, .. } if len == data.len()));
+        assert!(start.elapsed() < std::time::Duration::from_millis(500));
+    }
+
+    #[test]
+    fn empty_data_is_version_1() {
+        assert_eq!(Renderer::new().render("").unwrap().columns(), 29);
     }
 }
