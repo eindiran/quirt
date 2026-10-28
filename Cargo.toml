@@ -11,20 +11,17 @@ keywords = ["qr", "qrcode", "terminal", "cli"]
 categories = ["command-line-interface", "encoding"]
 
 [dependencies]
-# Encoder only; default features pull in the image/svg renderers, which are not used here.
+# Default features add unused image/SVG renderers.
 qrcode = { version = "0.14.1", default-features = false }
 thiserror = "2.0.21"
-# CLI-only dependencies, behind the `cli` feature so library users do not pull them in.
+# CLI only (feature `cli`).
 anyhow = { version = "1.0.104", optional = true }
 clap = { version = "4.6.7", features = ["derive"], optional = true }
-# Generate shell completions and the man page from the clap definition (--completions, --man).
 clap_complete = { version = "4.6.11", optional = true }
 clap_mangen = { version = "0.3.3", optional = true }
-# Reads the stdout terminal width so the CLI can refuse codes that would wrap.
 terminal_size = { version = "0.4.4", optional = true }
 
-# Tests open a pseudo-terminal to exercise the CLI's width check. Already in the tree via
-# terminal_size; only the pty and termios features are added.
+# PTY tests; already in the tree via terminal_size.
 [target.'cfg(unix)'.dev-dependencies]
 rustix = { version = "1.1.6", features = ["pty", "termios"] }
 

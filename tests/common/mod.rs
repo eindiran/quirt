@@ -1,12 +1,6 @@
-//! Shared test helper: decodes termqr's text output back to the payload bytes with rqrr,
-//! so tests check what a scanner would read rather than comparing termqr with itself.
+//! Decodes termqr output with rqrr, so tests check what a scanner reads.
 
-/// Decodes termqr output in any form it takes (half blocks or ASCII, plain or ANSI,
-/// either polarity, any scale or margin) and returns the payload bytes.
-///
-/// # Panics
-///
-/// Panics if no QR code decodes from `output`.
+/// Payload of termqr output in any glyphs, style, scale, or margin. Panics if none decodes.
 pub fn decode(output: &str) -> Vec<u8> {
     let cells = filled_cells(output);
     [false, true]
@@ -15,9 +9,7 @@ pub fn decode(output: &str) -> Vec<u8> {
         .unwrap_or_else(|| panic!("no QR code decodes from:\n{output}"))
 }
 
-/// The drawn cells, `true` where a cell is filled: a block glyph or `##` in plain output,
-/// a black background in ASCII ANSI output. Half blocks give two cell rows per line;
-/// ASCII gives one cell per two columns.
+/// Cells of the output, `true` where filled: a block, `##`, or a black ANSI background.
 pub fn filled_cells(output: &str) -> Vec<Vec<bool>> {
     let half_block = output.contains(['\u{2588}', '\u{2580}', '\u{2584}']);
     let mut rows = Vec::new();
@@ -27,7 +19,7 @@ pub fn filled_cells(output: &str) -> Vec<Vec<bool>> {
         let mut chars = line.chars();
         while let Some(c) = chars.next() {
             if c == '\x1b' {
-                // SGR sequence: ESC [ params m. Only the background matters, for ASCII.
+                // ESC [ params m; only the background matters.
                 let params: String = chars.by_ref().skip(1).take_while(|&p| p != 'm').collect();
                 for p in params.split(';') {
                     match p {
@@ -58,10 +50,9 @@ pub fn filled_cells(output: &str) -> Vec<Vec<bool>> {
     rows
 }
 
-/// Draws `cells` as a greyscale image inside a light surround and decodes it.
-/// `filled_is_light` selects the polarity: filled cells are dark unless it is set.
+/// Decodes `cells` drawn inside a light surround.
 fn decode_cells(cells: &[Vec<bool>], filled_is_light: bool) -> Option<Vec<u8>> {
-    // Surround in cells, and pixels per cell.
+    // Surround in cells; pixels per cell.
     const PAD: usize = 8;
     const PX: usize = 3;
     let width = cells.iter().map(Vec::len).max()? + 2 * PAD;

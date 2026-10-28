@@ -1,10 +1,8 @@
 # termqr
 
-Rust library for displaying QR codes in a terminal emulator.
+Renders QR codes as terminal text: a Rust library and the `termqr` CLI.
 
-Status: early development. Renders with Unicode half blocks or ASCII.
-
-## Usage
+## Library
 
 ```rust
 use termqr::{ErrorCorrection, Renderer, Style};
@@ -16,150 +14,68 @@ let code = Renderer::new()
 println!("{code}");
 ```
 
-`render` returns a `Rendered` with `columns()` and `lines()`, which exclude ANSI escapes.
-It keeps only the bordered module grid; `Display` produces the text one line at a time, so
-memory does not grow with `scale`.
-
 | Setting | Values | Default |
 | --- | --- | --- |
-| `style` | `LightOnDark`: plain glyphs, light modules filled. `DarkOnLight`: plain glyphs, dark modules filled. `Ansi`: escapes force black on bright white (SGR `30;107`; `40`/`107` backgrounds with ASCII) | `LightOnDark` |
-| `error_correction` | See below | `Medium` |
-| `glyphs` | `HalfBlock`: Unicode half blocks. `Ascii`: `##` per module, twice as wide; colored spaces with `Ansi` | `HalfBlock` |
-| `scale` | Module size factor (`NonZeroU8`): N columns by N half-lines with half blocks, 2N columns by N lines with ASCII; the margin scales too | 1 |
-| `margin` | Quiet zone in modules per side (`u8`). The spec requires 4; most scanners read 1-2. 0 scans only on a light background with `Ansi` or `DarkOnLight` | `DEFAULT_MARGIN` (4) |
+| `style` | `LightOnDark` and `DarkOnLight` (plain glyphs, light or dark modules filled), `Ansi` (black on bright white, any theme) | `LightOnDark` |
+| `glyphs` | `HalfBlock` (two module rows per line), `Ascii` (`##`, twice as wide) | `HalfBlock` |
+| `error_correction` | `Low`, `Medium`, `Quartile`, `High`: at most 2953, 2331, 1663, 1273 bytes | `Medium` |
+| `margin` | Quiet zone, modules per side | 4 |
+| `scale` | Module size multiplier | 1 |
 
-With the `cli` feature, `ErrorCorrection` also implements `clap::ValueEnum` (`L`, `M`,
-`Q`, `H`).
-
-Scanners need dark modules on a light background. Pick the plain style matching the
-terminal theme, or `Ansi`, which works on any theme.
-
-Data is split into numeric, alphanumeric, and byte segments, never Kanji: scanners decode
-Kanji segments as Shift JIS, which garbles UTF-8 text such as Japanese.
-
-`ErrorCorrection` trades capacity for damage tolerance. The smallest QR version that
-holds the input at that level is used; input that fits no version returns
-`Error::TooLong { len, level }`. `ErrorCorrection::max_bytes()` gives the limits below.
-
-| Level | Recoverable | Max bytes (version 40) |
-| --- | --- | --- |
-| `Low` (L) | ~7% | 2953 |
-| `Medium` (M, default) | ~15% | 2331 |
-| `Quartile` (Q) | ~25% | 1663 |
-| `High` (H) | ~30% | 1273 |
+- `Rendered` holds the module grid and `Display` writes one line at a time, so memory does
+  not grow with `scale`. `columns()` and `lines()` exclude ANSI escapes.
+- Kanji mode is never used: scanners decode it as Shift JIS, which garbles UTF-8 CJK text.
+- Input over `MAX_DATA_LEN` (7089 bytes) fails before encoding.
+- The `cli` feature makes `ErrorCorrection` a `clap::ValueEnum`.
 
 ## CLI
 
-The `termqr` binary is behind the `cli` feature, so library users do not pull in `clap`,
-`clap_complete`, `clap_mangen`, `anyhow`, or `terminal_size`.
-
 ```bash
 cargo install termqr --features cli
-```
-
-```bash
 termqr "https://example.com"
-```
-
-```bash
 pbpaste | termqr
 ```
 
-Input comes from `TEXT` if given, else `--file`, else stdin.
+`termqr --help` lists the flags. Behavior that is not obvious from it:
 
-Install completions and the man page, e.g. for zsh:
-
-```bash
-termqr --completions zsh > "${fpath[1]}/_termqr"
-```
-
-```bash
-termqr --man > /usr/local/share/man/man1/termqr.1
-```
-
-| Argument | Effect |
-| --- | --- |
-| `[TEXT]...` | Text to encode, verbatim; several words are joined with spaces. Use `termqr -- -x` for text starting with `-` |
-| `-f, --file FILE` | File to encode; `-` reads stdin. Conflicts with `TEXT` |
-| `--invert` | Plain glyphs with dark modules filled, for light-background terminals. Turns off `--color auto`; no effect with `--color always` |
-| `--color auto\|always\|never` | Force black-on-white with ANSI colors. `auto` (default) colors only a terminal stdout, and not when `NO_COLOR` is set, `TERM=dumb`, or `--invert` is given |
-| `--ec-level L\|M\|Q\|H` | Error-correction level, case-insensitive; default `M` |
-| `--margin N` | Quiet zone in modules per side, 1-32; default 4. 0 is refused because the terminal background is not a reliable quiet zone |
-| `--scale N` | Draw each module N times larger (2N columns by N lines with `--ascii`), 1-16; default 1 |
-| `--ascii` | ASCII only: `##` per module, twice as wide. Chosen automatically on a terminal whose locale (`LC_ALL`, `LC_CTYPE`, `LANG`) is not UTF-8; never on Windows |
-| `--unicode` | Half blocks even when the locale is not UTF-8 |
-| `--force` | Print even if the code is too wide or tall for the terminal |
-| `--completions SHELL` | Print a completion script (`bash`, `zsh`, `fish`, `elvish`, `powershell`) and exit |
-| `--man` | Print the man page (roff) and exit |
-| `--keep-newline` | Keep a trailing `\n`/`\r\n` from a file or stdin; stripped by default unless the input has NUL bytes or a UTF-16 BOM. Conflicts with `TEXT` |
-
-Input is encoded as raw bytes, without an ECI header, so the code holds exactly the input's
-encoding. Scanner apps nearly all assume UTF-8 (some guess), so convert other encodings
-first, e.g. `iconv -f SHIFT_JIS -t UTF-8 file | termqr`.
-
-One trailing `\n` or `\r\n` is trimmed from file and stdin input, except when the input
-contains a NUL byte or starts with a UTF-16 BOM (`FE FF`, `FF FE`): that marks UTF-16,
-UTF-32, or binary data, where a final 0x0A can be half of a code unit. BOM-less UTF-16
-text with no ASCII characters has neither (UTF-16BE `上` is `4E 0A`), so pass
-`--keep-newline` for it.
-
-The CLI exits 1 with a message on stderr when:
-
-| Condition | Message |
-| --- | --- |
-| Input is empty after newline trimming | `input is empty; nothing to encode` |
-| Input exceeds 7089 bytes (`termqr::MAX_DATA_LEN`, digits at level L) | `input is longer than 7089 bytes, more than any qr code holds` |
-| Input does not fit at the chosen level | `input is 2332 bytes, too long for error-correction level M (at most 2331 bytes of arbitrary data); it fits at --ec-level L` |
-| stdout is a terminal narrower than the code | `qr code is 185 columns wide but the terminal is 120; widen the terminal, shorten the input, or pass --force` |
-| stdout is a terminal with fewer than `lines + 1` rows (one is kept for the prompt) | `qr code is 39 lines tall but the terminal shows 23 above the prompt; enlarge the terminal, shorten the input, or pass --force` |
-| Both | `qr code is 66 columns wide but the terminal is 30, and 33 lines tall but it shows 9 above the prompt; enlarge the terminal, ...` |
-
-When a size check fails, the message names the fewest of `--margin 1`, `--ec-level L`, and
-`--scale 1` that would make the code fit, for example `qr code is 89 columns wide but the
-terminal is 80; --ec-level L makes it fit, or pass --force`. Only changes from the current
-settings are suggested.
-
-Input is read only up to `MAX_DATA_LEN` plus a trailing `\r\n` and one byte, so endless
-input such as `yes | termqr` fails immediately. The size checks look only at stdout, so
-`termqr > out.txt` from a terminal is not checked.
+- **Input:** `TEXT` (words joined with spaces, verbatim), else `--file`, else stdin, read up
+  to 7092 bytes so endless input fails fast. Bytes are encoded as-is without an ECI header;
+  scanners assume UTF-8, so convert other encodings first (`iconv -t UTF-8`).
+- **Newlines:** file and stdin input loses one trailing `\n` or `\r\n` unless
+  `--keep-newline`, or the input contains a NUL byte or starts with a UTF-16 BOM (UTF-16,
+  UTF-32, binary). BOM-less UTF-16 with no ASCII cannot be detected (UTF-16BE `上` is
+  `4E 0A`) and needs `--keep-newline`.
+- **Color:** `--color auto` uses ANSI only when stdout is a terminal and none of
+  `NO_COLOR`, `TERM=dumb`, or `--invert` applies.
+- **Glyphs:** `--ascii` is automatic on a terminal whose locale (`LC_ALL`, `LC_CTYPE`,
+  `LANG`) is not UTF-8, except on Windows; `--unicode` overrides it.
+- **Size:** when stdout is a terminal, a code that would wrap or scroll off (one row is kept
+  for the prompt) is an error naming the fewest of `--margin 1`, `--ec-level L`, `--scale 1`
+  that fit; `--force` prints anyway. Redirected output is not checked; the `--margin` (32)
+  and `--scale` (16) limits cap it at about 32 MB.
+- **Exit status:** 0 on success, including a closed pipe; 1 for input and size errors; 2 for
+  usage errors.
+- `--completions SHELL` and `--man` print to stdout.
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Code is stretched to about twice its width | The terminal draws East Asian Ambiguous characters (`█▀▄`) two columns wide, as with iTerm2's "Treat ambiguous-width characters as double width" or VTE's `ambiguous-width = wide`. Terminals do not report this, so the width check also undercounts | `--ascii` |
-| Thin lines between rows | Line spacing above 1.0 separates the half blocks | Set line spacing to 1.0, or `--ascii --color always` (colored spaces) |
-| Garbled characters | The locale says UTF-8 but the terminal is not | `--ascii` |
-| Scans fail on a light theme with `--color never` | Light modules are filled by default | `--invert`, or drop `--color never` |
-| Raw `ESC[30;107m` text on Windows (not verified) | The legacy console host does not interpret ANSI escapes unless a program enables VT mode, which termqr does not | `--color never` (and `--invert` on light themes), or Windows Terminal |
+| Code is twice as wide as it should be | The terminal draws ambiguous-width characters (`█▀▄`) two columns wide (iTerm2, VTE options); undetectable, so the width check undercounts | `--ascii` |
+| Lines between rows | Line spacing above 1.0 | Line spacing 1.0, or `--ascii --color always` |
+| Garbled characters | Locale says UTF-8 but the terminal is not | `--ascii` |
+| Light theme with `--color never` does not scan | Light modules are filled by default | `--invert` |
+| Raw `ESC[30;107m` on Windows (unverified) | Legacy console without VT mode | `--color never`, or Windows Terminal |
 
 ## Development
 
-Toolchain is pinned in `rust-toolchain.toml`. Requires `pre-commit`, `cargo-audit`,
-`cargo-deny`, and `checkmake`.
+`make check` runs fmt, clippy, `cargo audit`, `cargo deny`, the tests, and pre-commit. It
+needs `pre-commit`, `cargo-audit`, `cargo-deny`, and `checkmake`; the toolchain is pinned in
+`rust-toolchain.toml`. The render and Unicode tests decode output with `rqrr`. `deny.toml`
+allows only the licenses already in the tree.
 
-| Command | Action |
-| --- | --- |
-| `make test` | `cargo test --all-features`. `tests/render.rs` and `tests/unicode.rs` decode output with `rqrr` |
-| `make lint` | clippy with `-D warnings`, then `cargo audit` |
-| `make deny` | `cargo deny check` against `deny.toml` |
-| `make format` | `cargo fmt` |
-| `make check` | format check, lint, deny, test, `pre-commit run --all-files` |
-
-`deny.toml` allows only the licenses currently in the dependency tree. A new dependency
-under another license fails `make deny` until its license is added to `licenses.allow`.
-
-Install hooks with `pre-commit install`.
-
-## Prior art
-
-| Crate | Notes |
-| --- | --- |
-| `qr2term` | Half-block terminal output, few options |
-| `qrcode` | Encoder with a `unicode::Dense1x2` renderer; used here for encoding |
-| `tui-qrcode` | Ratatui widget |
-| `viuer` | Generic image display over Kitty, iTerm2, Sixel, or half blocks |
+Prior art: `qr2term`, `tui-qrcode`, `viuer`.
 
 ## License
 
-MIT. See `LICENSE`.
+MIT

@@ -1,10 +1,9 @@
-//! Render QR codes for display in a terminal emulator.
-//!
-//! [`Renderer`] encodes data with the [`qrcode`] crate and returns a [`Rendered`] code,
-//! which draws itself as text through `Display`.
+//! Render QR codes as terminal text.
 //!
 //! ```
-//! let code = termqr::Renderer::new().render("https://example.com")?;
+//! use termqr::{Renderer, Style};
+//!
+//! let code = Renderer::new().style(Style::Ansi).render("https://example.com")?;
 //! println!("{code}");
 //! # Ok::<(), termqr::Error>(())
 //! ```
@@ -18,35 +17,32 @@ use qrcode::optimize::{Optimizer, Parser, Segment};
 use qrcode::types::{Color, Mode, QrError, Version};
 use qrcode::{EcLevel, QrCode};
 
-/// Longest input, in bytes, that any QR code can hold: 7089 digits at version 40, level L.
-/// Longer input always fails, so readers can stop after `MAX_DATA_LEN + 1` bytes.
+/// Longest input any QR code holds, in bytes: 7089 digits at version 40-L.
 pub const MAX_DATA_LEN: usize = 7089;
 
-/// Modules of light border (quiet zone) the QR spec requires around the code.
+/// Quiet zone the QR spec requires, in modules.
 pub const DEFAULT_MARGIN: u8 = 4;
 
-/// Errors returned while building a QR code.
+/// Errors from [`Renderer::render`].
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
-    /// `len` bytes do not fit in the largest QR version at `level`.
+    /// `len` bytes do not fit in any version at `level`.
     #[error("{len} bytes do not fit in a qr code at error-correction level {level}")]
     TooLong {
         /// Input length in bytes.
         len: usize,
-        /// Level the encode was attempted at.
+        /// Requested level.
         level: ErrorCorrection,
     },
-    /// The encoder rejected the input for a reason other than its length.
+    /// Any other encoder failure.
     #[error("failed to encode data as a qr code")]
     Encode(#[source] QrError),
 }
 
-/// QR error-correction level: the share of codewords that can be damaged and still decode.
-///
-/// Higher levels survive more damage but hold less data, so the same input needs a larger
-/// code. The byte capacity listed for each level is that of version 40, the largest code.
-/// With the `cli` feature it is a `clap::ValueEnum` spelled `L`, `M`, `Q`, `H`.
+/// Error-correction level. Higher levels survive more damage but hold less. With the `cli`
+/// feature it is a `clap::ValueEnum` spelled `L`, `M`, `Q`, `H`; the variant docs are the
+/// CLI help.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
 #[non_exhaustive]
@@ -67,11 +63,10 @@ pub enum ErrorCorrection {
 }
 
 impl ErrorCorrection {
-    /// All levels, from least to most error correction.
+    /// All levels, lowest first.
     pub const ALL: [Self; 4] = [Self::Low, Self::Medium, Self::Quartile, Self::High];
 
-    /// Most bytes of arbitrary data a version-40 code holds at this level. Input made only
-    /// of digits or uppercase alphanumerics packs denser and can be longer.
+    /// Byte-mode capacity of version 40. Digits and uppercase pack denser.
     #[must_use]
     pub const fn max_bytes(self) -> usize {
         match self {
@@ -83,7 +78,6 @@ impl ErrorCorrection {
     }
 }
 
-/// Formats as the standard single letter: `L`, `M`, `Q`, or `H`.
 impl fmt::Display for ErrorCorrection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
@@ -110,46 +104,28 @@ impl From<ErrorCorrection> for EcLevel {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum Style {
-    /// Plain glyphs in the terminal's colors with light modules filled, for terminals with
-    /// a dark background.
+    /// Plain glyphs, light modules filled: for dark backgrounds.
     #[default]
     LightOnDark,
-    /// Plain glyphs with dark modules filled, for terminals with a light background.
+    /// Plain glyphs, dark modules filled: for light backgrounds.
     DarkOnLight,
-    /// ANSI escapes force black modules on a bright-white background on every line, so
-    /// the code scans on any theme: SGR `30;107` with half blocks, `40` and `107`
-    /// backgrounds with ASCII.
+    /// ANSI black on bright white, for any background.
     Ansi,
 }
 
-/// Characters the code is drawn with.
+/// Characters to draw with. Both keep modules square in a 1:2 character cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum Glyphs {
-    /// Unicode half blocks: one column and half a line per module.
+    /// Unicode half blocks, two module rows per line.
     #[default]
     HalfBlock,
-    /// ASCII only: `##` or two spaces per module, one line tall, so twice as wide as
-    /// [`Glyphs::HalfBlock`]. Works in non-UTF-8 terminals and in terminals that draw the
-    /// block characters two columns wide. With [`Style::Ansi`], modules are colored
-    /// spaces.
+    /// `##` per module, twice as wide; colored spaces with [`Style::Ansi`].
     Ascii,
 }
 
-/// Renders QR codes as terminal text. Modules stay square in the usual 1:2 character cell:
-/// [`Glyphs::HalfBlock`] puts two module rows on each line, [`Glyphs::Ascii`] draws each
-/// module two characters wide.
-///
-/// ```
-/// use termqr::{ErrorCorrection, Renderer, Style};
-///
-/// let code = Renderer::new()
-///     .error_correction(ErrorCorrection::High)
-///     .style(Style::Ansi)
-///     .render("https://example.com")?;
-/// println!("{code}");
-/// # Ok::<(), termqr::Error>(())
-/// ```
+/// Render settings. Defaults: level M, [`Style::LightOnDark`], [`Glyphs::HalfBlock`],
+/// [`DEFAULT_MARGIN`], scale 1.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Renderer {
     error_correction: ErrorCorrection,
@@ -172,8 +148,7 @@ impl Default for Renderer {
 }
 
 impl Renderer {
-    /// A renderer with level M, [`Style::LightOnDark`], [`Glyphs::HalfBlock`], a
-    /// [`DEFAULT_MARGIN`]-module quiet zone, and scale 1.
+    /// Same as `default()`.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
@@ -186,63 +161,54 @@ impl Renderer {
         self
     }
 
-    /// Sets how modules map to colors.
+    /// Sets the style.
     #[must_use]
     pub fn style(mut self, style: Style) -> Self {
         self.style = style;
         self
     }
 
-    /// Sets the characters the code is drawn with.
+    /// Sets the glyphs.
     #[must_use]
     pub fn glyphs(mut self, glyphs: Glyphs) -> Self {
         self.glyphs = glyphs;
         self
     }
 
-    /// Sets the quiet zone, in modules on each side. The spec requires 4; most scanners
-    /// read 1 or 2, which saves space in small terminals. With 0 the code touches the
-    /// terminal background, which scanners read as part of the code unless it is light and
-    /// the style is [`Style::Ansi`] or [`Style::DarkOnLight`].
+    /// Quiet zone in modules per side. Most scanners read 1-2. With 0 the terminal
+    /// background is the border, so it only scans on a light one with a dark-filled style.
     #[must_use]
     pub fn margin(mut self, modules: u8) -> Self {
         self.margin = modules;
         self
     }
 
-    /// Draws each module `factor` times larger, for codes that must scan from farther
-    /// away: `factor` columns by `factor` half-lines with half blocks, twice as many columns
-    /// by `factor` lines with ASCII. The margin scales with it.
+    /// Module size multiplier; the margin scales too.
     #[must_use]
     pub fn scale(mut self, factor: NonZeroU8) -> Self {
         self.scale = factor;
         self
     }
 
-    /// Encodes `data` in the smallest QR version that holds it and renders it, including
-    /// the quiet zone.
+    /// Encodes `data` in the smallest version that holds it.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::TooLong`] if `data` does not fit in any QR version at the chosen
-    /// level, and [`Error::Encode`] for any other encoder failure.
+    /// [`Error::TooLong`] if no version holds `data`.
     pub fn render(&self, data: impl AsRef<[u8]>) -> Result<Rendered, Error> {
         let code = encode(data.as_ref(), self.error_correction)?;
         Ok(Rendered::new(&code, *self))
     }
 }
 
-/// Encodes `data` in the smallest QR version that holds it, using qrcode's segment
-/// optimizer but never Kanji mode. The optimizer puts any byte pair that is valid Shift JIS
-/// into Kanji segments, and scanners decode those as Shift JIS, which garbles UTF-8 text
-/// such as Japanese.
+/// qrcode's encoder minus Kanji mode, which it picks for any Shift-JIS-valid byte pair.
+/// Scanners decode Kanji segments as Shift JIS, garbling UTF-8 such as Japanese.
 fn encode(data: &[u8], level: ErrorCorrection) -> Result<QrCode, Error> {
     let too_long = Error::TooLong {
         len: data.len(),
         level,
     };
-    // Nothing longer fits; checking first keeps huge input from being parsed and pushed
-    // through all 40 versions.
+    // Parsing huge input through 40 versions takes seconds.
     if data.len() > MAX_DATA_LEN {
         return Err(too_long);
     }
@@ -271,22 +237,17 @@ fn encode(data: &[u8], level: ErrorCorrection) -> Result<QrCode, Error> {
     Err(too_long)
 }
 
-/// SGR black foreground on bright-white background, for half blocks.
 const ANSI_DARK_ON_LIGHT: &str = "\x1b[30;107m";
-/// SGR black and bright-white backgrounds, for ASCII.
 const ANSI_BG_BLACK: &str = "\x1b[40m";
 const ANSI_BG_WHITE: &str = "\x1b[107m";
 const ANSI_RESET: &str = "\x1b[0m";
 
-/// A rendered code. It holds the bordered module grid and produces text one line at a
-/// time, so `Display` output of any scale needs memory for one line only. Size accessors
-/// exclude ANSI escapes.
+/// A rendered code. `Display` draws it one line at a time, so memory does not grow with
+/// scale. Sizes exclude ANSI escapes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Rendered {
-    /// Row-major `side * side` modules, quiet zone included, `true` where the glyph is
-    /// filled. The style is already applied.
+    /// Row-major, `side` x `side` modules including the quiet zone, style applied.
     filled: Vec<bool>,
-    /// Modules per side, quiet zone included.
     side: usize,
     scale: usize,
     glyphs: Glyphs,
@@ -298,7 +259,7 @@ impl Rendered {
         let modules = code.width();
         let margin = usize::from(settings.margin);
         let side = modules + 2 * margin;
-        // Every style but LightOnDark fills the dark modules. The quiet zone is light.
+        // The quiet zone is light.
         let fill_dark = settings.style != Style::LightOnDark;
         let mut filled = vec![!fill_dark; side * side];
         for (i, color) in code.to_colors().into_iter().enumerate() {
@@ -314,7 +275,7 @@ impl Rendered {
         }
     }
 
-    /// Width in terminal columns.
+    /// Width in columns.
     #[must_use]
     pub fn columns(&self) -> usize {
         match self.glyphs {
@@ -332,14 +293,12 @@ impl Rendered {
         }
     }
 
-    /// The module row drawn at scaled row `y`, or `None` past the bottom: the lower half
-    /// of the last half-block line when the scaled side is odd, which shows the background.
+    /// Module row at scaled row `y`. `None` for the half line past an odd bottom edge.
     fn row(&self, y: usize) -> Option<&[bool]> {
         let start = y / self.scale * self.side;
         self.filled.get(start..start + self.side)
     }
 
-    /// Appends output line `line` (without newline) to `out`.
     fn push_line(&self, line: usize, out: &mut String) {
         match self.glyphs {
             Glyphs::HalfBlock => {
@@ -359,8 +318,7 @@ impl Rendered {
                 }
             }
             Glyphs::Ascii if self.ansi => {
-                // `#` leaves gaps in its cell, so draw colored spaces, with an escape only
-                // where the color changes.
+                // `#` leaves gaps, so color spaces instead, one escape per run.
                 for run in self
                     .row(line)
                     .expect("line is below lines()")
@@ -385,7 +343,7 @@ impl Rendered {
     }
 }
 
-/// Writes the lines joined with `\n`, with no trailing newline.
+/// Lines joined by `\n`, no trailing newline.
 impl fmt::Display for Rendered {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut buf = String::new();
@@ -409,8 +367,7 @@ mod tests {
         Renderer::new().error_correction(level).render(data)
     }
 
-    /// Byte-mode reference code for `data`: the smallest version that holds it, built
-    /// without qrcode's segment optimizer.
+    /// Smallest pure byte-mode code for `data`.
     fn byte_mode_code(data: &[u8], level: EcLevel) -> QrCode {
         (1..=40)
             .find_map(|v| {
@@ -422,7 +379,6 @@ mod tests {
             .unwrap()
     }
 
-    /// `code` drawn by qrcode's own half-block renderer, light or dark modules filled.
     fn dense1x2(code: &QrCode, style: Style) -> String {
         use qrcode::render::unicode::Dense1x2;
         let (dark, light) = match style {
@@ -438,9 +394,7 @@ mod tests {
 
     #[test]
     fn shift_jis_lookalikes_are_not_kanji_encoded() {
-        // qrcode's optimizer puts byte pairs that look like Shift JIS into Kanji mode, and
-        // scanners decode those as Shift JIS: the UTF-8 text came out as "...隱槭...".
-        // Real Shift JIS input gets byte mode too, since its encoding is unknowable.
+        // Scanned as "...隱槭..." when encoded in Kanji mode.
         let utf8 = "日本語のテキスト".as_bytes();
         let shift_jis = b"\x93\xfa\x96{\x8c\xea\x82\xcc";
         assert_ne!(
@@ -457,8 +411,7 @@ mod tests {
 
     #[test]
     fn plain_styles_match_qrcode_dense1x2() {
-        // Inputs without Shift JIS byte pairs, covering byte, numeric, and alphanumeric
-        // segments, where termqr and qrcode encode identically.
+        // No Shift JIS pairs, so qrcode encodes these as termqr does.
         for data in [
             "hello",
             "https://example.com",
@@ -475,7 +428,7 @@ mod tests {
 
     #[test]
     fn size_accessors() {
-        // "hello" is version 1: 21 modules. Columns and lines for (glyphs, margin, scale).
+        // "hello" is 21 modules.
         for (glyphs, margin, scale, columns, lines) in [
             (Glyphs::HalfBlock, 4, 1, 29, 15),
             (Glyphs::HalfBlock, 0, 1, 21, 11),
@@ -520,13 +473,11 @@ mod tests {
             .unwrap();
         let text = code.to_string();
         assert!(text.is_ascii() && !text.contains('#'));
-        // The first line is all quiet zone: one white run, then the reset.
         let first = text.lines().next().unwrap();
         assert_eq!(
             first,
             format!("{ANSI_BG_WHITE}{}{ANSI_RESET}", " ".repeat(116))
         );
-        // Colors alternate: no escape repeats the color already in effect.
         for line in text.lines() {
             let colors: Vec<&str> = line
                 .split('\x1b')
@@ -539,8 +490,6 @@ mod tests {
 
     #[test]
     fn display_writes_one_line_at_a_time() {
-        // Records the largest single write, so the test fails if `Display` ever buffers
-        // the whole code.
         struct MaxChunk(usize);
         impl fmt::Write for MaxChunk {
             fn write_str(&mut self, s: &str) -> fmt::Result {
@@ -555,7 +504,6 @@ mod tests {
             .unwrap();
         let mut sink = MaxChunk(0);
         fmt::write(&mut sink, format_args!("{code}")).unwrap();
-        // At most one line: escapes plus `columns` glyphs of up to 3 UTF-8 bytes each.
         let line_bytes = ANSI_DARK_ON_LIGHT.len() + 3 * code.columns() + ANSI_RESET.len();
         assert!(sink.0 <= line_bytes);
         assert!(code.to_string().len() > 100 * line_bytes);
@@ -563,7 +511,7 @@ mod tests {
 
     #[test]
     fn capacity_per_level() {
-        // 0x00 bytes force byte mode, so `max_bytes` is the exact limit.
+        // NUL bytes force byte mode.
         for level in ErrorCorrection::ALL {
             let max = level.max_bytes();
             assert!(render_at(vec![0u8; max], level).is_ok());
@@ -591,8 +539,7 @@ mod tests {
 
     #[test]
     fn higher_level_needs_larger_code() {
-        // 20 bytes need version 2 at L (holds 32) and version 3 at H (holds 24). Width with
-        // quiet zone is 25 + 4 * version.
+        // Version 2 at L, 3 at H; width is 25 + 4 * version.
         let data = "https://example.com/";
         assert_eq!(render_at(data, ErrorCorrection::Low).unwrap().columns(), 33);
         assert_eq!(
@@ -603,9 +550,7 @@ mod tests {
 
     #[test]
     fn oversized_input_fails_before_encoding() {
-        // Encoding parses every byte and tries all 40 versions, which took seconds and
-        // hundreds of MB for tens of MiB of input. Anything over MAX_DATA_LEN cannot fit.
-        // Alternating modes makes many segments; one long run would fail fast anyway.
+        // Alternating modes make many segments; a single run fails fast regardless.
         let data: Vec<u8> = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123a"
             .iter()
             .copied()

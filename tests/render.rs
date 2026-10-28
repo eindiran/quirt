@@ -1,5 +1,4 @@
-//! Cell-exact rendering checks: output for every style, glyph set, margin, and scale is
-//! parsed back into cells and compared with qrcode's own module matrix, then decoded.
+//! Every style, glyph set, margin, and scale, checked cell by cell against qrcode's matrix.
 
 mod common;
 
@@ -11,13 +10,12 @@ use termqr::{Glyphs, Renderer, Style};
 
 #[test]
 fn cells_match_the_module_matrix() {
-    // No Shift JIS byte pairs, so qrcode's own encoding is the one termqr uses.
+    // No Shift JIS pairs, so qrcode encodes these as termqr does.
     for data in ["hello", "https://example.com/path?q=1", "0123456789"] {
         let code = QrCode::with_error_correction_level(data, EcLevel::M).unwrap();
         let modules = code.width();
         let dark = code.to_colors();
         for style in [Style::LightOnDark, Style::DarkOnLight, Style::Ansi] {
-            // LightOnDark fills light modules; the others fill dark ones.
             let fill_dark = style != Style::LightOnDark;
             for glyphs in [Glyphs::HalfBlock, Glyphs::Ascii] {
                 for margin in [0, 1, 4] {
@@ -34,8 +32,7 @@ fn cells_match_the_module_matrix() {
                         let (margin, scale) = (usize::from(margin), usize::from(scale));
                         let side = (modules + 2 * margin) * scale;
                         let cells = common::filled_cells(&text);
-                        // Half blocks round the height up to whole lines; the extra
-                        // half-line is unfilled and shows the background.
+                        // Half blocks pad an odd height with an unfilled half line.
                         let height = match glyphs {
                             Glyphs::HalfBlock => side.div_ceil(2) * 2,
                             _ => side,

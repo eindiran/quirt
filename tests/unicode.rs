@@ -1,13 +1,10 @@
-//! Round trips of unusual Unicode in common text encodings: every payload is rendered,
-//! decoded with a real QR decoder, and must come back byte for byte. termqr encodes raw
-//! bytes, so this checks that no segment mode, newline trimming, or input path alters
-//! them.
+//! Unusual Unicode in common encodings must decode byte for byte through every input path.
 
 mod common;
 
 use termqr::{Glyphs, Renderer};
 
-/// Named sample texts. Escapes mark characters that are invisible or easily confused.
+/// Escapes mark invisible or confusable characters.
 const SAMPLES: &[(&str, &str)] = &[
     ("ascii", "Hello, world! ~`|"),
     (
@@ -24,7 +21,7 @@ const SAMPLES: &[(&str, &str)] = &[
     ("cjk_extension_b", "\u{20000}\u{2070e}\u{210c1}\u{2a6a5}"),
     ("halfwidth_katakana", "ｱｲｳｴｵ ｶﾞ"),
     ("emoji", "🎉🚀💩"),
-    // ZWJ family, rainbow flag (ZWJ + VS16), skin tone, keycap, regional-indicator flags.
+    // ZWJ family, rainbow flag, skin tone, keycap, flag.
     (
         "emoji_sequences",
         "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467} \u{1f3f3}\u{fe0f}\u{200d}\u{1f308} \
@@ -35,7 +32,7 @@ const SAMPLES: &[(&str, &str)] = &[
         "Z\u{0334}\u{0321}\u{031b}\u{0353}a\u{0337}l\u{0338}g\u{0335}o e\u{0301} \u{0e01}\u{0e34}",
     ),
     ("rtl", "שלום \u{202e}abc\u{202c} مرحبا"),
-    // Ends in U+0AC0, whose UTF-16LE form ends with byte 0x0A.
+    // Ends in U+0AC0: UTF-16LE ends with byte 0x0A.
     ("indic", "नमस्ते ਕਖ ગુજરાતી"),
     ("linear_a", "\u{10600}\u{10601}\u{10602}\u{10740}"),
     // Linear B, cuneiform, Egyptian hieroglyph, Old Italic, Gothic, Deseret.
@@ -56,7 +53,7 @@ const SAMPLES: &[(&str, &str)] = &[
     ("mongolian_cherokee", "ᠮᠣᠩᠭᠣᠯ ᏣᎳᎩ"),
 ];
 
-/// Legacy encodings: name, text, and the bytes Python's codecs produce for it.
+/// Encoding, text, and the bytes Python's codecs produce.
 const LEGACY: &[(&str, &str, &[u8])] = &[
     (
         "windows-1252",
@@ -74,7 +71,7 @@ const LEGACY: &[(&str, &str, &[u8])] = &[
         "日本語のテキスト ｶﾅ",
         b"\xc6\xfc\xcb\xdc\xb8\xec\xa4\xce\xa5\xc6\xa5\xad\xa5\xb9\xa5\xc8 \x8e\xb6\x8e\xc5",
     ),
-    // Contains ESC bytes, like termqr's own ANSI output.
+    // Contains ESC bytes.
     (
         "iso-2022-jp",
         "日本語 mixed ASCII",
@@ -123,14 +120,13 @@ const LEGACY: &[(&str, &str, &[u8])] = &[
     ("mac-roman", "café ≠ ∞ π ﬁ", b"caf\x8e \xad \xb0 \xb9 \xde"),
 ];
 
-/// A payload under test: `sample/encoding` name and the bytes.
 struct Payload {
     name: String,
     bytes: Vec<u8>,
 }
 
-/// `text` in the encodings std can produce: UTF-8, UTF-16, and UTF-32 in both byte orders,
-/// with and without BOM, plus ISO-8859-1 when every character fits.
+/// `text` as UTF-8/16/32 in both byte orders, with and without BOM, and Latin-1 if it fits.
+/// The flag marks ASCII-compatible encodings.
 fn encodings(text: &str) -> Vec<(&'static str, bool, Vec<u8>)> {
     let utf16 = |big_endian: bool| -> Vec<u8> {
         text.encode_utf16()
@@ -184,7 +180,6 @@ fn encodings(text: &str) -> Vec<(&'static str, bool, Vec<u8>)> {
     out
 }
 
-/// Every sample in every std encoding, then every legacy fixture.
 fn payloads() -> Vec<Payload> {
     let mut out = Vec::new();
     for (sample, text) in SAMPLES {
@@ -229,8 +224,7 @@ mod cli {
 
     use super::{Payload, SAMPLES, common, encodings, payloads};
 
-    /// Writes `bytes` to a temp file unique to this process and `tag`, runs termqr on it with
-    /// `flags`, and removes the file.
+    /// Runs termqr on `bytes` written to a temp file named after `tag`.
     fn run_file(tag: &str, bytes: &[u8], flags: &[&str]) -> Output {
         let path: PathBuf =
             std::env::temp_dir().join(format!("termqr-unicode-{}-{tag}", std::process::id()));
@@ -245,7 +239,6 @@ mod cli {
         out
     }
 
-    /// Decodes a successful run's stdout.
     fn decoded(out: &Output, name: &str) -> Vec<u8> {
         assert!(
             out.status.success(),
@@ -257,8 +250,7 @@ mod cli {
         )
     }
 
-    /// None of the payloads ends in a newline, so nothing may be trimmed, including from
-    /// UTF-16LE `indic`, whose last byte is the 0x0A of U+0AC0.
+    /// No payload ends in a newline, so none may be trimmed (UTF-16LE `indic` ends in 0x0A).
     #[test]
     fn every_payload_round_trips_from_a_file() {
         for (i, p) in payloads().iter().enumerate() {
@@ -277,8 +269,7 @@ mod cli {
             &["--scale", "2", "--margin", "1"],
             &["--ec-level", "H"],
         ];
-        // One sample with supplementary-plane characters in each std encoding, and every
-        // legacy fixture.
+        // One astral-plane sample in each std encoding, plus the legacy fixtures.
         let legacy = super::LEGACY.iter().map(|(encoding, text, bytes)| Payload {
             name: format!("{text}/{encoding}"),
             bytes: bytes.to_vec(),
@@ -296,10 +287,8 @@ mod cli {
         }
     }
 
-    /// A trailing newline in the input's own encoding is trimmed only for ASCII-compatible
-    /// encodings. Trimming a 0x0A byte from UTF-16 or UTF-32 input would cut a code unit
-    /// in half. Text that contains NUL (the `controls` sample) is treated as binary: termqr
-    /// cannot tell it from UTF-16, so it is not trimmed either.
+    /// Only ASCII-compatible text loses a trailing newline. Text with NUL (`controls`) counts
+    /// as binary.
     #[test]
     fn trailing_newline_is_trimmed_only_in_ascii_compatible_encodings() {
         for (sample, text) in SAMPLES {

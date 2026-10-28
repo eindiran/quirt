@@ -1,4 +1,4 @@
-//! End-to-end tests for the `termqr` binary, compared against the library's output.
+//! `termqr` binary tests, checked against the library's output.
 #![cfg(feature = "cli")]
 
 use std::io::Write;
@@ -11,7 +11,6 @@ fn termqr() -> Command {
     Command::new(env!("CARGO_BIN_EXE_termqr"))
 }
 
-/// Runs termqr with `args`, feeding `stdin`, with stdout and stderr piped.
 fn run(args: &[&str], stdin: &[u8]) -> Output {
     let mut child = termqr()
         .args(args)
@@ -39,14 +38,12 @@ fn stderr(out: &Output) -> String {
     String::from_utf8_lossy(&out.stderr).into_owned()
 }
 
-/// What `renderer` prints for `data`, with the trailing newline termqr adds.
 fn expected(renderer: Renderer, data: &str) -> String {
     format!("{}\n", renderer.render(data).expect("test inputs fit"))
 }
 
 #[test]
 fn flags_match_the_library() {
-    // Piped stdout: no colors or ASCII unless asked for.
     let base = Renderer::new();
     for (flags, renderer) in [
         (&[][..], base),
@@ -95,13 +92,11 @@ fn input_sources() {
     std::fs::write(&path, "from file\n").unwrap();
     let file = path.to_str().unwrap();
     for (args, stdin, data) in [
-        // stdin and files lose one trailing newline unless --keep-newline.
         (&[][..], &b"hello\n"[..], "hello"),
         (&["-f", "-"], b"hello\r\n", "hello"),
         (&["--keep-newline", "-f", "-"], b"hello\n", "hello\n"),
         (&["-f", file], b"ignored", "from file"),
         (&["--keep-newline", "--file", file], b"", "from file\n"),
-        // TEXT is verbatim, ignores stdin, and joins words with spaces.
         (&["https://example.com"], b"ignored", "https://example.com"),
         (&["hello\n"], b"", "hello\n"),
         (&["hello", "big", "world"], b"", "hello big world"),
@@ -180,8 +175,7 @@ fn input_errors_exit_1() {
 
 #[test]
 fn input_size_limits() {
-    // The read limit leaves room for a trimmed "\r\n" after MAX_DATA_LEN digits, and
-    // piped output is never size-checked, so the 185-column version 40 prints.
+    // The read limit fits MAX_DATA_LEN plus "\r\n"; pipes skip the size check.
     let longest = [vec![b'7'; termqr::MAX_DATA_LEN], b"\r\n".to_vec()].concat();
     assert!(run(&["--ec-level", "L"], &longest).status.success());
     assert!(run(&[], &[b'a'; 2000]).status.success());
@@ -190,8 +184,7 @@ fn input_size_limits() {
 #[cfg(unix)]
 #[test]
 fn endless_stdin_fails_fast() {
-    // Unbounded reading would never finish on /dev/zero; give it 10 s, so a regression
-    // fails instead of hanging the test run.
+    // A deadline, so a read-limit regression fails instead of hanging.
     let mut child = termqr()
         .stdin(std::fs::File::open("/dev/zero").unwrap())
         .stdout(Stdio::piped())
@@ -213,9 +206,7 @@ fn endless_stdin_fails_fast() {
 
 #[test]
 fn largest_output_streams_through_a_closed_pipe() {
-    // Largest code at both limits, piped into a reader that stops at once: termqr must
-    // exit 0 on the broken pipe. That streaming keeps memory low is checked by the
-    // library's display_writes_one_line_at_a_time.
+    // Largest output into a closed pipe must exit 0.
     let mut child = termqr()
         .args([
             "--scale",
@@ -254,7 +245,7 @@ fn generators() {
     assert!(page.contains("\\-\\-margin"));
 }
 
-/// Tests against a real pseudo-terminal sized `cols` x 24 on stdout.
+/// Tests with stdout on a real pseudo-terminal.
 #[cfg(unix)]
 mod pty {
     use std::ffi::OsStr;
@@ -270,7 +261,7 @@ mod pty {
 
     use super::stderr;
 
-    /// Returns the controller (kept open so the terminal stays alive) and the terminal end.
+    /// Returns the controller, which must stay open, and the terminal end, `cols` x 24.
     fn open_terminal(cols: u16) -> io::Result<(OwnedFd, File)> {
         let controller = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY)?;
         grantpt(&controller)?;
@@ -290,8 +281,7 @@ mod pty {
         Ok((controller, terminal))
     }
 
-    /// A termqr command with the terminal-facing environment fixed: a UTF-8 locale, a color
-    /// `TERM`, and no `NO_COLOR`, so results do not depend on the caller's environment.
+    /// termqr with a fixed UTF-8, color-capable environment.
     fn termqr(args: &[&str], env: &[(&str, &str)]) -> Command {
         let mut cmd = super::termqr();
         cmd.args(args)
@@ -305,23 +295,20 @@ mod pty {
         cmd
     }
 
-    /// Runs termqr with stdout on a `cols` x 24 terminal and returns its exit status and
-    /// stderr, plus everything it wrote to the terminal (where `\n` becomes `\r\n`).
+    /// Returns the run (status, stderr) and what reached the terminal, `\n` as `\r\n`.
     fn run_on_terminal(
         cols: u16,
         args: &[&str],
         env: &[(&str, &str)],
     ) -> io::Result<(Output, Vec<u8>)> {
         let (controller, terminal) = open_terminal(cols)?;
-        // Read the controller side concurrently so output cannot fill the pty buffer and
-        // block termqr. The read ends with EOF or EIO once the child, the last holder of
-        // the terminal, exits.
+        // Drain the pty so termqr cannot block on a full buffer; EOF or EIO when it exits.
         let reader = std::thread::spawn(move || {
             let mut out = Vec::new();
             let _ = File::from(controller).read_to_end(&mut out); // EIO marks the end
             out
         });
-        // The Command holds a copy of the terminal; it is a temporary, dropped after spawn.
+        // A temporary Command, so its copy of the terminal closes after spawn.
         let child = termqr(args, env)
             .stdout(terminal)
             .stderr(Stdio::piped())
@@ -331,12 +318,12 @@ mod pty {
         Ok((out, written))
     }
 
-    /// Flags, environment overrides, and a check on what reached the terminal.
+    /// Flags, environment, check on the terminal output.
     type Case<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)], fn(&[u8]) -> bool);
 
     #[test]
     fn environment_picks_colors_and_glyphs() {
-        // --margin 1 keeps the ASCII code (46x23) inside the 80x24 terminal.
+        // --margin 1 fits the ASCII code (46x23) in 80x24.
         let ansi = |out: &[u8]| out.starts_with(b"\x1b[30;107m");
         let plain_blocks = |out: &[u8]| !out.contains(&0x1b) && !out.is_ascii();
         let ascii = |out: &[u8]| out.is_ascii();
@@ -384,7 +371,7 @@ mod pty {
     fn size_errors_on_terminal_stdout() {
         let bytes = |n| "\u{1}".repeat(n);
         for (cols, args, message) in [
-            // 600 bytes: version 19, 101 columns. 300 bytes: version 13, 77x39.
+            // 600 bytes: 101 columns. 300 bytes: 77x39.
             (
                 80,
                 vec![bytes(600)],
@@ -395,8 +382,7 @@ mod pty {
                 vec![bytes(300)],
                 "qr code is 39 lines tall but the terminal shows 23",
             ),
-            // --scale 2 makes "hello" 58x29. In 40x24 --margin 1 (46 columns) and
-            // --ec-level L (still version 1) are not enough; --scale 1 (29x15) fits.
+            // 58x29; --margin 1 and L are not enough, --scale 1 (29x15) is.
             (
                 40,
                 vec!["--scale".into(), "2".into(), "hello".into()],
@@ -423,7 +409,7 @@ mod pty {
 
     #[test]
     fn terminal_on_stderr_only_is_not_checked() {
-        // Models `termqr > out.txt` run from an 80-column terminal.
+        // `termqr > out.txt` from a terminal.
         let (_controller, terminal) = open_terminal(80).unwrap();
         let out = termqr(&[&"a".repeat(600)], &[])
             .stdout(Stdio::piped())

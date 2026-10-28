@@ -1,6 +1,5 @@
 .DEFAULT_GOAL := help
 
-# One @printf per line keeps the help doc easy to hand-edit.
 .PHONY: help
 help:
 	@printf 'Usage: make <target>\n'

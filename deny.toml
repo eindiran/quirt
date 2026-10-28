@@ -1,5 +1,3 @@
-# cargo-deny config. Run with `cargo deny check` (`make deny`).
-
 [graph]
 all-features = true
 
@@ -9,8 +7,7 @@ yanked = "deny"
 ignore = []
 
 [licenses]
-# Only licenses present in the tree; cargo-deny warns on unused entries. Add others as
-# dependencies need them, keeping to licenses compatible with shipping under MIT.
+# Only licenses in the tree (cargo-deny warns on unused ones); add MIT-compatible ones as needed.
 allow = [
     "Apache-2.0",
     "MIT",
