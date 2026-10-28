@@ -1,8 +1,14 @@
 # quirt
 
-Renders QR codes as terminal text: a Rust library and the `quirt` CLI.
+Renders QR codes as terminal text: a Rust library and the `quirt` CLI. Not yet on
+crates.io; depend on or install from git.
 
 ## Library
+
+```toml
+[dependencies]
+quirt = { git = "https://github.com/eindiran/quirt" }
+```
 
 ```rust
 use quirt::{ErrorCorrection, Renderer, Style};
@@ -31,10 +37,12 @@ println!("{code}");
 ## CLI
 
 ```bash
-cargo install quirt --features cli
+cargo install --git https://github.com/eindiran/quirt --features cli
 quirt "https://example.com"
 pbpaste | quirt
 ```
+
+The binary needs the `cli` feature. From a clone, `cargo install --path . --features cli`.
 
 `quirt --help` lists the flags. Behavior that is not obvious from it:
 
