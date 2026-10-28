@@ -129,6 +129,35 @@ needs `pre-commit`, `cargo-audit`, `cargo-deny`, and `checkmake`; the toolchain 
 `rust-toolchain.toml`. The render and Unicode tests decode output with `rqrr`. `deny.toml`
 allows only the licenses already in the tree.
 
+### Layout
+
+```text
+.
+├── documentation
+│   ├── cli-behavior.md        # what --help does not cover
+│   └── troubleshooting.md
+├── src
+│   ├── lib.rs                 # encoding and rendering
+│   └── main.rs                # CLI: input, terminal detection, size checks
+├── tests
+│   ├── common
+│   │   └── mod.rs             # decodes output with rqrr
+│   ├── cli.rs                 # binary, incl. PTY tests and README --help sync
+│   ├── render.rs              # cell-exact checks of every render setting
+│   └── unicode.rs             # Unicode samples in many encodings, decoded byte for byte
+├── .gitignore
+├── .pre-commit-config.yaml    # fmt, clippy, audit, deny, tests, yamllint, checkmake
+├── Cargo.lock
+├── Cargo.toml                 # lints; `cli` feature gates the binary's dependencies
+├── LICENSE
+├── Makefile                   # make help lists targets
+├── README.md
+├── checkmake.ini
+├── clippy.toml
+├── deny.toml                  # cargo-deny license and source policy
+└── rust-toolchain.toml        # pinned toolchain
+```
+
 Prior art: `qr2term`, `tui-qrcode`, `viuer`.
 
 ## License
