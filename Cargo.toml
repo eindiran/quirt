@@ -1,11 +1,11 @@
 [package]
-name = "termqr"
+name = "quirt"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 description = "Display QR codes in a terminal emulator"
 license = "MIT"
-repository = "https://github.com/eindiran/termqr"
+repository = "https://github.com/eindiran/quirt"
 readme = "README.md"
 keywords = ["qr", "qrcode", "terminal", "cli"]
 categories = ["command-line-interface", "encoding"]
@@ -35,7 +35,7 @@ cli = [
 ]
 
 [[bin]]
-name = "termqr"
+name = "quirt"
 path = "src/main.rs"
 required-features = ["cli"]
 

@@ -1,11 +1,11 @@
-# termqr
+# quirt
 
-Renders QR codes as terminal text: a Rust library and the `termqr` CLI.
+Renders QR codes as terminal text: a Rust library and the `quirt` CLI.
 
 ## Library
 
 ```rust
-use termqr::{ErrorCorrection, Renderer, Style};
+use quirt::{ErrorCorrection, Renderer, Style};
 
 let code = Renderer::new()
     .error_correction(ErrorCorrection::Medium)
@@ -31,12 +31,12 @@ println!("{code}");
 ## CLI
 
 ```bash
-cargo install termqr --features cli
-termqr "https://example.com"
-pbpaste | termqr
+cargo install quirt --features cli
+quirt "https://example.com"
+pbpaste | quirt
 ```
 
-`termqr --help` lists the flags. Behavior that is not obvious from it:
+`quirt --help` lists the flags. Behavior that is not obvious from it:
 
 - **Input:** `TEXT` (words joined with spaces, verbatim), else `--file`, else stdin, read up
   to 7092 bytes so endless input fails fast. Bytes are encoded as-is without an ECI header;

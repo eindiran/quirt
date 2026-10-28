@@ -1,24 +1,24 @@
-//! `termqr` binary tests, checked against the library's output.
+//! `quirt` binary tests, checked against the library's output.
 #![cfg(feature = "cli")]
 
 use std::io::Write;
 use std::num::NonZeroU8;
 use std::process::{Command, Output, Stdio};
 
-use termqr::{ErrorCorrection, Glyphs, Renderer, Style};
+use quirt::{ErrorCorrection, Glyphs, Renderer, Style};
 
-fn termqr() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_termqr"))
+fn quirt() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_quirt"))
 }
 
 fn run(args: &[&str], stdin: &[u8]) -> Output {
-    let mut child = termqr()
+    let mut child = quirt()
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("cargo builds the termqr binary for integration tests");
+        .expect("cargo builds the quirt binary for integration tests");
     child
         .stdin
         .take()
@@ -31,7 +31,7 @@ fn run(args: &[&str], stdin: &[u8]) -> Output {
 }
 
 fn stdout(out: &Output) -> String {
-    String::from_utf8(out.stdout.clone()).expect("termqr writes UTF-8 or ASCII")
+    String::from_utf8(out.stdout.clone()).expect("quirt writes UTF-8 or ASCII")
 }
 
 fn stderr(out: &Output) -> String {
@@ -73,7 +73,7 @@ fn flags_match_the_library() {
 #[test]
 fn color_always_overrides_no_color() {
     for no_color in ["", "1"] {
-        let out = termqr()
+        let out = quirt()
             .args(["--color", "always", "hello"])
             .env("NO_COLOR", no_color)
             .output()
@@ -88,7 +88,7 @@ fn color_always_overrides_no_color() {
 #[test]
 fn input_sources() {
     let plain = Renderer::new();
-    let path = std::env::temp_dir().join(format!("termqr-cli-{}.txt", std::process::id()));
+    let path = std::env::temp_dir().join(format!("quirt-cli-{}.txt", std::process::id()));
     std::fs::write(&path, "from file\n").unwrap();
     let file = path.to_str().unwrap();
     for (args, stdin, data) in [
@@ -145,9 +145,9 @@ fn input_errors_exit_1() {
         (&[], b"\r\n".to_vec(), "input is empty; nothing to encode"),
         (&[""], vec![], "input is empty; nothing to encode"),
         (
-            &["--file", "/nonexistent/termqr-input"],
+            &["--file", "/nonexistent/quirt-input"],
             vec![],
-            "failed to read /nonexistent/termqr-input",
+            "failed to read /nonexistent/quirt-input",
         ),
         (
             &["--ec-level", "H"],
@@ -162,7 +162,7 @@ fn input_errors_exit_1() {
         ),
         (
             &["--ec-level", "L"],
-            [digits(termqr::MAX_DATA_LEN + 1), b"\n".to_vec()].concat(),
+            [digits(quirt::MAX_DATA_LEN + 1), b"\n".to_vec()].concat(),
             "input is longer than 7089 bytes, more than any qr code holds",
         ),
     ] {
@@ -176,7 +176,7 @@ fn input_errors_exit_1() {
 #[test]
 fn input_size_limits() {
     // The read limit fits MAX_DATA_LEN plus "\r\n"; pipes skip the size check.
-    let longest = [vec![b'7'; termqr::MAX_DATA_LEN], b"\r\n".to_vec()].concat();
+    let longest = [vec![b'7'; quirt::MAX_DATA_LEN], b"\r\n".to_vec()].concat();
     assert!(run(&["--ec-level", "L"], &longest).status.success());
     assert!(run(&[], &[b'a'; 2000]).status.success());
 }
@@ -185,7 +185,7 @@ fn input_size_limits() {
 #[test]
 fn endless_stdin_fails_fast() {
     // A deadline, so a read-limit regression fails instead of hanging.
-    let mut child = termqr()
+    let mut child = quirt()
         .stdin(std::fs::File::open("/dev/zero").unwrap())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -195,7 +195,7 @@ fn endless_stdin_fails_fast() {
     while child.try_wait().unwrap().is_none() {
         if std::time::Instant::now() > deadline {
             let _ = child.kill(); // the test fails below either way
-            panic!("termqr kept reading /dev/zero");
+            panic!("quirt kept reading /dev/zero");
         }
         std::thread::sleep(std::time::Duration::from_millis(20));
     }
@@ -207,7 +207,7 @@ fn endless_stdin_fails_fast() {
 #[test]
 fn largest_output_streams_through_a_closed_pipe() {
     // Largest output into a closed pipe must exit 0.
-    let mut child = termqr()
+    let mut child = quirt()
         .args([
             "--scale",
             "16",
@@ -232,16 +232,16 @@ fn largest_output_streams_through_a_closed_pipe() {
 #[test]
 fn generators() {
     for (shell, marker) in [
-        ("bash", "_termqr()"),
-        ("zsh", "#compdef termqr"),
-        ("fish", "complete -c termqr"),
+        ("bash", "_quirt()"),
+        ("zsh", "#compdef quirt"),
+        ("fish", "complete -c quirt"),
     ] {
         let script = stdout(&run(&["--completions", shell], b""));
         assert!(script.contains(marker), "{shell} script lacks {marker:?}");
         assert!(script.contains("ec-level"));
     }
     let page = stdout(&run(&["--man"], b""));
-    assert!(page.contains(".TH termqr"));
+    assert!(page.contains(".TH quirt"));
     assert!(page.contains("\\-\\-margin"));
 }
 
@@ -255,9 +255,9 @@ mod pty {
     use std::os::unix::ffi::OsStrExt;
     use std::process::{Command, Output, Stdio};
 
+    use quirt::{Renderer, Style};
     use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
     use rustix::termios::{Winsize, tcsetwinsize};
-    use termqr::{Renderer, Style};
 
     use super::stderr;
 
@@ -281,9 +281,9 @@ mod pty {
         Ok((controller, terminal))
     }
 
-    /// termqr with a fixed UTF-8, color-capable environment.
-    fn termqr(args: &[&str], env: &[(&str, &str)]) -> Command {
-        let mut cmd = super::termqr();
+    /// quirt with a fixed UTF-8, color-capable environment.
+    fn quirt(args: &[&str], env: &[(&str, &str)]) -> Command {
+        let mut cmd = super::quirt();
         cmd.args(args)
             .env("LANG", "en_US.UTF-8")
             .env("TERM", "xterm-256color")
@@ -302,14 +302,14 @@ mod pty {
         env: &[(&str, &str)],
     ) -> io::Result<(Output, Vec<u8>)> {
         let (controller, terminal) = open_terminal(cols)?;
-        // Drain the pty so termqr cannot block on a full buffer; EOF or EIO when it exits.
+        // Drain the pty so quirt cannot block on a full buffer; EOF or EIO when it exits.
         let reader = std::thread::spawn(move || {
             let mut out = Vec::new();
             let _ = File::from(controller).read_to_end(&mut out); // EIO marks the end
             out
         });
         // A temporary Command, so its copy of the terminal closes after spawn.
-        let child = termqr(args, env)
+        let child = quirt(args, env)
             .stdout(terminal)
             .stderr(Stdio::piped())
             .spawn()?;
@@ -409,9 +409,9 @@ mod pty {
 
     #[test]
     fn terminal_on_stderr_only_is_not_checked() {
-        // `termqr > out.txt` from a terminal.
+        // `quirt > out.txt` from a terminal.
         let (_controller, terminal) = open_terminal(80).unwrap();
-        let out = termqr(&[&"a".repeat(600)], &[])
+        let out = quirt(&[&"a".repeat(600)], &[])
             .stdout(Stdio::piped())
             .stderr(terminal)
             .output()

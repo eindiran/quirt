@@ -1,6 +1,6 @@
-//! Decodes termqr output with rqrr, so tests check what a scanner reads.
+//! Decodes quirt output with rqrr, so tests check what a scanner reads.
 
-/// Payload of termqr output in any glyphs, style, scale, or margin. Panics if none decodes.
+/// Payload of quirt output in any glyphs, style, scale, or margin. Panics if none decodes.
 pub fn decode(output: &str) -> Vec<u8> {
     let cells = filled_cells(output);
     [false, true]

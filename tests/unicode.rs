@@ -2,7 +2,7 @@
 
 mod common;
 
-use termqr::{Glyphs, Renderer};
+use quirt::{Glyphs, Renderer};
 
 /// Escapes mark invisible or confusable characters.
 const SAMPLES: &[(&str, &str)] = &[
@@ -224,17 +224,17 @@ mod cli {
 
     use super::{Payload, SAMPLES, common, encodings, payloads};
 
-    /// Runs termqr on `bytes` written to a temp file named after `tag`.
+    /// Runs quirt on `bytes` written to a temp file named after `tag`.
     fn run_file(tag: &str, bytes: &[u8], flags: &[&str]) -> Output {
         let path: PathBuf =
-            std::env::temp_dir().join(format!("termqr-unicode-{}-{tag}", std::process::id()));
+            std::env::temp_dir().join(format!("quirt-unicode-{}-{tag}", std::process::id()));
         std::fs::write(&path, bytes).expect("temp dir is writable");
-        let out = Command::new(env!("CARGO_BIN_EXE_termqr"))
+        let out = Command::new(env!("CARGO_BIN_EXE_quirt"))
             .args(flags)
             .arg("--file")
             .arg(&path)
             .output()
-            .expect("termqr runs");
+            .expect("quirt runs");
         let _ = std::fs::remove_file(&path); // best-effort cleanup of a temp file
         out
     }
@@ -245,9 +245,7 @@ mod cli {
             "{name}: {}",
             String::from_utf8_lossy(&out.stderr)
         );
-        common::decode(
-            &String::from_utf8(out.stdout.clone()).expect("termqr writes UTF-8 or ASCII"),
-        )
+        common::decode(&String::from_utf8(out.stdout.clone()).expect("quirt writes UTF-8 or ASCII"))
     }
 
     /// No payload ends in a newline, so none may be trimmed (UTF-16LE `indic` ends in 0x0A).
@@ -319,7 +317,7 @@ mod cli {
     fn every_nul_free_payload_round_trips_as_an_argument() {
         use std::os::unix::ffi::OsStrExt;
         for p in payloads().iter().filter(|p| !p.bytes.contains(&0)) {
-            let out = Command::new(env!("CARGO_BIN_EXE_termqr"))
+            let out = Command::new(env!("CARGO_BIN_EXE_quirt"))
                 .arg("--")
                 .arg(std::ffi::OsStr::from_bytes(&p.bytes))
                 .output()
@@ -331,7 +329,7 @@ mod cli {
     #[test]
     fn payloads_round_trip_through_stdin() {
         for p in payloads().iter().filter(|p| p.name.starts_with("cjk/")) {
-            let mut child = Command::new(env!("CARGO_BIN_EXE_termqr"))
+            let mut child = Command::new(env!("CARGO_BIN_EXE_quirt"))
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())

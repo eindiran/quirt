@@ -1,4 +1,4 @@
-//! `termqr` CLI: prints TEXT, a file, or stdin as a QR code.
+//! `quirt` CLI: prints TEXT, a file, or stdin as a QR code.
 
 use std::ffi::OsString;
 use std::fs;
@@ -8,7 +8,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::{CommandFactory, Parser, ValueEnum};
-use termqr::{ErrorCorrection, Glyphs, Rendered, Renderer, Style};
+use quirt::{ErrorCorrection, Glyphs, Rendered, Renderer, Style};
 
 /// Print text as a QR code in the terminal.
 ///
@@ -41,7 +41,7 @@ struct Args {
     color: ColorWhen,
 
     /// Quiet zone in modules, 1-32; most scanners read 1-2
-    #[arg(long, value_name = "N", default_value_t = termqr::DEFAULT_MARGIN,
+    #[arg(long, value_name = "N", default_value_t = quirt::DEFAULT_MARGIN,
           allow_negative_numbers = true,
           value_parser = clap::value_parser!(u8).range(1..=i64::from(MAX_MARGIN)))]
     margin: u8,
@@ -102,7 +102,7 @@ struct Terminal {
 impl Terminal {
     fn detect() -> Self {
         let var = |name| std::env::var_os(name).filter(|v| !v.is_empty());
-        // Not terminal_size(): it falls back to stderr, which would check `termqr > file`.
+        // Not terminal_size(): it falls back to stderr, which would check `quirt > file`.
         let size = terminal_size::terminal_size_of(io::stdout())
             .map(|(terminal_size::Width(w), terminal_size::Height(h))| (w, h));
         Self {
@@ -129,7 +129,7 @@ fn main() -> anyhow::Result<()> {
     if let Some(shell) = args.completions {
         // clap_complete panics on write errors.
         let mut script = Vec::new();
-        clap_complete::generate(shell, &mut Args::command(), "termqr", &mut script);
+        clap_complete::generate(shell, &mut Args::command(), "quirt", &mut script);
         return write_stdout(|out| out.write_all(&script));
     }
     if args.man {
@@ -146,7 +146,7 @@ fn main() -> anyhow::Result<()> {
     write_stdout(|out| writeln!(out, "{code}"))
 }
 
-/// Buffered stdout; a closed pipe (`termqr | head`) is success.
+/// Buffered stdout; a closed pipe (`quirt | head`) is success.
 fn write_stdout(write: impl FnOnce(&mut dyn Write) -> io::Result<()>) -> anyhow::Result<()> {
     let mut out = io::BufWriter::new(io::stdout().lock());
     match write(&mut out).and_then(|()| out.flush()) {
@@ -176,19 +176,19 @@ fn read_input(args: &Args) -> anyhow::Result<Vec<u8>> {
     if data.is_empty() {
         anyhow::bail!("input is empty; nothing to encode");
     }
-    if data.len() > termqr::MAX_DATA_LEN {
+    if data.len() > quirt::MAX_DATA_LEN {
         anyhow::bail!(
             "input is longer than {} bytes, more than any qr code holds",
-            termqr::MAX_DATA_LEN
+            quirt::MAX_DATA_LEN
         );
     }
     Ok(data)
 }
 
-/// Stops just past [`termqr::MAX_DATA_LEN`], so `yes | termqr` fails fast.
+/// Stops just past [`quirt::MAX_DATA_LEN`], so `yes | quirt` fails fast.
 fn read_limited(reader: impl Read) -> io::Result<Vec<u8>> {
     // A trimmable "\r\n" plus one byte to detect overflow.
-    let limit = termqr::MAX_DATA_LEN + 3;
+    let limit = quirt::MAX_DATA_LEN + 3;
     let mut buf = Vec::new();
     reader
         .take(u64::try_from(limit).expect("limit fits in u64"))
@@ -246,7 +246,7 @@ fn renderer(args: &Args, terminal: &Terminal) -> Renderer {
 /// Adds the byte limit and the highest lower level that fits to `TooLong`.
 fn render(data: &[u8], renderer: Renderer) -> anyhow::Result<Rendered> {
     match renderer.render(data) {
-        Err(termqr::Error::TooLong { len, level }) => {
+        Err(quirt::Error::TooLong { len, level }) => {
             let hint = ErrorCorrection::ALL
                 .into_iter()
                 .rev()
@@ -410,7 +410,7 @@ mod tests {
     }
 
     fn args(args: &[&str]) -> Args {
-        Args::parse_from(["termqr"].iter().chain(args).chain(&["x"]))
+        Args::parse_from(["quirt"].iter().chain(args).chain(&["x"]))
     }
 
     #[test]

@@ -6,11 +6,11 @@ use std::num::NonZeroU8;
 
 use qrcode::types::Color;
 use qrcode::{EcLevel, QrCode};
-use termqr::{Glyphs, Renderer, Style};
+use quirt::{Glyphs, Renderer, Style};
 
 #[test]
 fn cells_match_the_module_matrix() {
-    // No Shift JIS pairs, so qrcode encodes these as termqr does.
+    // No Shift JIS pairs, so qrcode encodes these as quirt does.
     for data in ["hello", "https://example.com/path?q=1", "0123456789"] {
         let code = QrCode::with_error_correction_level(data, EcLevel::M).unwrap();
         let modules = code.width();

@@ -237,6 +237,21 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
 
 [[package]]
+name = "quirt"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "clap_complete",
+ "clap_mangen",
+ "qrcode",
+ "rqrr",
+ "rustix",
+ "terminal_size",
+ "thiserror",
+]
+
+[[package]]
 name = "quote"
 version = "1.0.47"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -310,21 +325,6 @@ checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
 dependencies = [
  "rustix",
  "windows-sys",
-]
-
-[[package]]
-name = "termqr"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "clap_complete",
- "clap_mangen",
- "qrcode",
- "rqrr",
- "rustix",
- "terminal_size",
- "thiserror",
 ]
 
 [[package]]

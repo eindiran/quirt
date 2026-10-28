@@ -1,11 +1,11 @@
 //! Render QR codes as terminal text.
 //!
 //! ```
-//! use termqr::{Renderer, Style};
+//! use quirt::{Renderer, Style};
 //!
 //! let code = Renderer::new().style(Style::Ansi).render("https://example.com")?;
 //! println!("{code}");
-//! # Ok::<(), termqr::Error>(())
+//! # Ok::<(), quirt::Error>(())
 //! ```
 
 use std::fmt;
@@ -411,7 +411,7 @@ mod tests {
 
     #[test]
     fn plain_styles_match_qrcode_dense1x2() {
-        // No Shift JIS pairs, so qrcode encodes these as termqr does.
+        // No Shift JIS pairs, so qrcode encodes these as quirt does.
         for data in [
             "hello",
             "https://example.com",
